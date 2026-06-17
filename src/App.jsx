@@ -1,0 +1,1063 @@
+import { useEffect, useMemo, useState } from 'react';
+import {
+  AlertTriangle,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Clipboard,
+  ClipboardPaste,
+  Copy,
+  ExternalLink,
+  Eye,
+  FileText,
+  Link as LinkIcon,
+  ListChecks,
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+  X,
+} from 'lucide-react';
+
+const STORAGE_KEY = 'rubrics-qc-workbench.v1';
+const COLS = ['prompt', 'repo', '任务类型', 'rubrics', '评分', '备注'];
+
+const EMPTY_DATA = {
+  prompt: '',
+  repo: '',
+  taskType: '',
+  rubrics: '',
+  score: '',
+  note: '',
+};
+
+const RUBRICS_RULES = `# Rubrics标注
+根据prompt写成高质量的Rubrics，明确整理并描述各项得分点，形成清晰的评分依据。更准确地识别前端生成结果是否满足需求，以及满足到了什么程度。关键就是输出的rubrics能够将核心内容“东西做没做成，关键点做没做对”量化成可以打分的评判依据，将笼统的prompt描述变成严格定义且没有歧义的打分单位，rubrics里的每一点就是对prompt里的要求的完成情况的给分点。
+
+优先保留下面这些特征：
+- 对任务完成度或结果可用性有实质影响
+- 能通过代码、行为、输出或静态检查较稳定判断
+- 一条 rubric 只检查一件事
+- 不依赖主观解释，prompt里面描述的是什么就一定要保持描述一致，不要凭空捏造，泛化，猜想并延伸原本的意思。这点尤为重要，要严格执行。
+- 相同意思只保留一条
+
+不要写：
+- 美观、友好、流畅、现代感
+- 结构清晰、模块化设计、代码风格规范
+- 难以稳定判断的弱要求
+
+数量建议：
+- 4 到 10条，优先保留最重要的显式要求
+
+## 示例
+prompt:
+创建一个直观的酒店数据驾驶舱单页应用，用于展示酒店的关键运营指标，
+比如实时呈现本月的入住率、客房收入和平均房价；
+同时用图表清晰展示近期的客户来源分布，所有数据应都能支持快速按日期筛选并突出显示关键趋势
+
+rubrics:
+1. 创建一个可正确加载的单页面数据看板应用
+2. 数据看板中包含酒店的关键运营指标，比如呈现本月的入住率、客房收入和平均房价
+3. 选用合适的图表展示客群分布
+4. 看板中所有数据支持按日期筛选且联动高亮展示`;
+
+function trimCell(value) {
+  return String(value ?? '').replace(/\u00A0/g, ' ').trim();
+}
+
+function stripCodeFence(value) {
+  return String(value || '')
+    .replace(/^`{3,4}\s*/g, '')
+    .replace(/\s*`{3,4}$/g, '')
+    .trim();
+}
+
+function parseDelimitedRows(rawText, delimiter) {
+  const text = String(rawText || '').replace(/^\uFEFF/, '');
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        cell += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === delimiter && !inQuotes) {
+      row.push(trimCell(cell));
+      cell = '';
+      continue;
+    }
+
+    if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && next === '\n') index += 1;
+      row.push(trimCell(cell));
+      rows.push(normalizeDelimitedRow(row, delimiter));
+      row = [];
+      cell = '';
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(trimCell(cell));
+  rows.push(normalizeDelimitedRow(row, delimiter));
+
+  return rows
+    .map((cells) => cells.map(trimCell))
+    .filter((cells) => cells.some((cellValue) => cellValue !== ''));
+}
+
+function normalizeDelimitedRow(row, delimiter) {
+  if (delimiter !== '|') return row;
+  const next = [...row];
+  if (next[0] === '') next.shift();
+  if (next[next.length - 1] === '') next.pop();
+  return next;
+}
+
+function looksLikeHeader(row) {
+  const normalized = row.map((cell) => cell.trim().toLowerCase());
+  return (
+    normalized.includes('prompt') &&
+    normalized.includes('repo') &&
+    normalized.some((cell) => cell === 'rubrics' || cell === 'rubric') &&
+    normalized.some((cell) => cell === '评分')
+  );
+}
+
+function pickDataRow(rows) {
+  const nonEmpty = rows.filter((row) => row.some((cell) => cell.trim() !== ''));
+  if (nonEmpty.length >= 2 && looksLikeHeader(nonEmpty[0])) return nonEmpty[1];
+  return nonEmpty[0] || [];
+}
+
+function parseRawRow(rawText) {
+  const clean = stripCodeFence(rawText);
+  const tabRow = pickDataRow(parseDelimitedRows(clean, '\t'));
+  let row = tabRow;
+  let delimiterName = 'Tab';
+
+  if (row.length < 6) {
+    const pipeRow = pickDataRow(parseDelimitedRows(clean, '|'));
+    if (pipeRow.length >= row.length) {
+      row = pipeRow;
+      delimiterName = '竖线';
+    }
+  }
+
+  const data =
+    row.length >= 6
+      ? {
+          prompt: row[0] || '',
+          repo: row[1] || '',
+          taskType: row[2] || '',
+          rubrics: row[3] || '',
+          score: row[4] || '',
+          note: row.slice(5).join('\n') || '',
+        }
+      : EMPTY_DATA;
+
+  if (row.length !== 6) {
+    return {
+      ok: false,
+      delimiterName,
+      row,
+      data,
+      errors: [
+        row.length < 6
+          ? `只解析到 ${row.length} 列，需要 6 列。`
+          : `解析到 ${row.length} 列，多出的列已合并到备注。`,
+      ],
+    };
+  }
+
+  return { ok: true, delimiterName, row, data, errors: [] };
+}
+
+function parseRepoList(repoText) {
+  const value = trimCell(repoText);
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+  } catch (error) {
+    // Fall back to loose URL extraction.
+  }
+
+  const urlMatches = value.match(/https?:\/\/[^\s,"'\]\)]+/g);
+  if (urlMatches) return urlMatches;
+
+  return value
+    .split(/[\n,，]+/)
+    .map((item) => item.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean);
+}
+
+function parseRubricItems(rubricsText) {
+  const text = String(rubricsText || '').trim();
+  if (!text) return [];
+
+  const numbered = [...text.matchAll(/^\s*(\d+)\s*[\.、\)]\s+(.+?)(?=\n\s*\d+\s*[\.、\)]\s+|$)/gms)]
+    .map((match) => ({ number: Number(match[1]), text: match[2].trim() }))
+    .filter((item) => item.text);
+  if (numbered.length) return numbered;
+
+  return [...text.matchAll(/^\s*[-*]\s+(.+)$/gm)]
+    .map((match, index) => ({ number: index + 1, text: match[1].trim() }))
+    .filter((item) => item.text);
+}
+
+function parseScoreMatrix(scoreText) {
+  const original = stripCodeFence(scoreText);
+  if (!original) {
+    return { ok: false, matrix: null, errors: ['评分列为空，需要填写 0/1 二维数组。'] };
+  }
+
+  if (/[，；]/.test(original)) {
+    return { ok: false, matrix: null, errors: ['评分列包含中文逗号或中文分号，二维数组必须使用英文逗号。'] };
+  }
+
+  let value = original;
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1).trim();
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    return {
+      ok: false,
+      matrix: null,
+      errors: [`评分列不是合法 JSON 二维数组：${error.message}`],
+    };
+  }
+
+  const errors = [];
+  if (!Array.isArray(parsed)) {
+    return { ok: false, matrix: parsed, errors: ['评分列顶层必须是数组，例如 [[1,0],[1,1]]。'] };
+  }
+
+  parsed.forEach((row, rowIndex) => {
+    if (!Array.isArray(row)) {
+      errors.push(`第 ${rowIndex + 1} 行不是数组。`);
+      return;
+    }
+    row.forEach((valueItem, colIndex) => {
+      if (!(valueItem === 0 || valueItem === 1)) {
+        errors.push(`第 ${rowIndex + 1} 行第 ${colIndex + 1} 列不是 0 或 1。`);
+      }
+    });
+  });
+
+  return { ok: errors.length === 0, matrix: parsed, errors };
+}
+
+function validateData(data) {
+  const repos = parseRepoList(data.repo);
+  const rubrics = parseRubricItems(data.rubrics);
+  const score = parseScoreMatrix(data.score);
+  const matrix = Array.isArray(score.matrix) ? score.matrix : null;
+  const errors = [...score.errors];
+  const warnings = [];
+
+  if (!repos.length) warnings.push('repo 列未解析到链接。');
+  if (!rubrics.length) warnings.push('rubrics 列未解析到编号条目。');
+
+  if (matrix) {
+    const rowLengths = matrix.map((row) => (Array.isArray(row) ? row.length : '非数组'));
+    const uniqueLengths = [...new Set(rowLengths.map(String))];
+    if (uniqueLengths.length > 1) errors.push(`评分矩阵各行长度不一致：${rowLengths.join('、')}。`);
+    if (repos.length && matrix.length !== repos.length) {
+      errors.push(`评分矩阵行数应等于 repo 数量 ${repos.length}，当前为 ${matrix.length}。`);
+    }
+    if (rubrics.length) {
+      matrix.forEach((row, index) => {
+        if (Array.isArray(row) && row.length !== rubrics.length) {
+          errors.push(`第 ${index + 1} 行评分数量应等于 rubrics 条数 ${rubrics.length}，当前为 ${row.length}。`);
+        }
+      });
+    }
+  }
+
+  return { repos, rubrics, score, matrix, errors, warnings };
+}
+
+function expandNumberList(value) {
+  return String(value || '')
+    .replace(/和/g, '、')
+    .split(/[、,，\s]+/)
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item > 0);
+}
+
+function parseRemarkIssues(noteText) {
+  const issueMap = new Map();
+  const lines = String(noteText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  lines.forEach((line) => {
+    const pageMatch = line.match(/第\s*(\d+)\s*个页面/);
+    if (!pageMatch) return;
+
+    const pageIndex = Number(pageMatch[1]) - 1;
+    const issueMatches = [
+      ...line.matchAll(/第\s*([0-9、,，\s和]+)\s*个\s*rub(?:rics|tics)?\s*->\s*([^；;]+)/gi),
+    ];
+
+    issueMatches.forEach((match) => {
+      const rubricNumbers = expandNumberList(match[1]);
+      const description = match[2].replace(/[。.]$/, '').trim();
+      rubricNumbers.forEach((rubricNumber) => {
+        issueMap.set(`${pageIndex}:${rubricNumber - 1}`, description);
+      });
+    });
+  });
+
+  return issueMap;
+}
+
+function getOriginalScore(matrix, repoIndex, rubricIndex) {
+  const value = matrix?.[repoIndex]?.[rubricIndex];
+  return value === 0 || value === 1 ? value : null;
+}
+
+function createReviewState(repos, rubrics, matrix, noteText, previous = {}) {
+  const remarkIssues = parseRemarkIssues(noteText);
+  return {
+    promptRubricIssues: previous.promptRubricIssues || '',
+    finalNote: previous.finalNote || '',
+    pages: repos.map((_, repoIndex) => {
+      const previousPage = previous.pages?.[repoIndex] || {};
+      return {
+        visited: Boolean(previousPage.visited),
+        pageNote: previousPage.pageNote || '',
+        checks: rubrics.map((_, rubricIndex) => {
+          const originalScore = getOriginalScore(matrix, repoIndex, rubricIndex);
+          const previousCheck = previousPage.checks?.[rubricIndex];
+          const seededIssue = remarkIssues.get(`${repoIndex}:${rubricIndex}`) || '';
+
+          return {
+            expected: previousCheck?.expected ?? originalScore,
+            confirmed: Boolean(previousCheck?.confirmed),
+            issue: previousCheck?.issue ?? (originalScore === 0 ? seededIssue : ''),
+          };
+        }),
+      };
+    }),
+  };
+}
+
+function splitIssueLines(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^[-*]\s*/, ''))
+    .filter(Boolean);
+}
+
+function buildUpdatedMatrix(review, repos, rubrics, matrix) {
+  return repos.map((_, repoIndex) =>
+    rubrics.map((_, rubricIndex) => {
+      const expected = review.pages?.[repoIndex]?.checks?.[rubricIndex]?.expected;
+      if (expected === 0 || expected === 1) return expected;
+      return getOriginalScore(matrix, repoIndex, rubricIndex) ?? 0;
+    }),
+  );
+}
+
+function buildQcComment(review, repos, rubrics, matrix) {
+  const lines = [];
+
+  splitIssueLines(review.promptRubricIssues).forEach((issue) => {
+    lines.push(`- prompt/rubrics 检查 -> ${issue}`);
+  });
+
+  repos.forEach((_, repoIndex) => {
+    const page = review.pages?.[repoIndex];
+    if (!page) return;
+
+    splitIssueLines(page.pageNote).forEach((issue) => {
+      lines.push(`- 第${repoIndex + 1}个页面 -> 页面整体问题 -> ${issue}`);
+    });
+
+    rubrics.forEach((rubric, rubricIndex) => {
+      const check = page.checks?.[rubricIndex];
+      if (!check) return;
+
+      const originalScore = getOriginalScore(matrix, repoIndex, rubricIndex);
+      const expectedScore = check.expected;
+      const rubricNumber = rubric.number || rubricIndex + 1;
+      const hasMismatch = (expectedScore === 0 || expectedScore === 1) && originalScore !== null && originalScore !== expectedScore;
+
+      if (expectedScore === 0) {
+        const issue = check.issue.trim() || '未填写具体问题描述';
+        const scoreText = hasMismatch ? `；原评分为${originalScore}，质检应为0` : '';
+        lines.push(`- 第${repoIndex + 1}个页面 -> 第${rubricNumber}个rubrics -> ${issue}${scoreText}`);
+      } else if (expectedScore === 1 && hasMismatch) {
+        lines.push(`- 第${repoIndex + 1}个页面 -> 第${rubricNumber}个rubrics -> 页面符合该条要求，原评分为0，质检应为1`);
+      }
+    });
+  });
+
+  splitIssueLines(review.finalNote).forEach((issue) => {
+    lines.push(`- 其他质检问题 -> ${issue}`);
+  });
+
+  return lines.length ? lines.join('\n') : '- 合格';
+}
+
+function buildRubricsReviewPrompt(data) {
+  const fence = '````';
+  const exampleFence = '```';
+
+  return [
+    '我现在要完成一项任务，我会给你一段prompt和一段rubrics，我需要你根据rules给出具有结构性的结论。',
+    '下面我会给你prompt、rubrics和rules：',
+    'prompt：',
+    '',
+    fence,
+    data.prompt.trim(),
+    fence,
+    '',
+    'rubrics:',
+    '',
+    fence,
+    data.rubrics.trim(),
+    fence,
+    '',
+    'rules:',
+    '',
+    fence,
+    RUBRICS_RULES,
+    fence,
+    '',
+    '下面给你讲一下你要干的事情：',
+    '',
+    '1. rules是任务目标的定义，是任务的执行规范。',
+    '',
+    '2. prompt是原始的输入材料。',
+    '',
+    '3. rubrics是对原始输入材料按照rules规范进行处理后得到的输出。',
+    '',
+    '4. 你的任务就是，核对rubrics的正确性，你要严格执行rules的规范去检查rubrics的质量。',
+    '',
+    '5. 如果rubrics没有问题，就输出 ”合格“。',
+    '',
+    '6. 如果rubrics有问题，就输出具体问题的描述，输出描述的要求如下：',
+    '',
+    '   1. 使用中肯、清晰、明确的描述，直接明了指出问题以及原因。',
+    '',
+    '   2. 多个错误点使用“-【空格】【描述】【回车】”的格式输出，描述直接用一句话描述出问题以及原因，不要使用“-【总结】：【具体描述】”这样的格式进行回答。',
+    '',
+    '   3. 不要有任何多余的字符输出，只输出给定模板的内容。',
+    '',
+    '   4. 不要包含任何人称代词，不要出现任何对话语境，只需要机械的输出规范的数据。',
+    '',
+    '   5. 下面是输出示例（仅供参考）：',
+    '',
+    `      ${exampleFence}`,
+    '      - rubrics 未提及游戏标题《几何防线》',
+    '      - prompt 明确要求"用 React 框架实现"，但 rubrics 未包含',
+    '      - 按规则，不满 10 条时中文要求需单独列为一条，但当前 rubrics 未包含',
+    '      - 第 1 条缺少"点射塔（正方形）、溅射塔（圆形）、减速塔（三角形）"的具体类型对应',
+    '      - 第 8 条缺少失败条件描述（敌人到达基地，消耗完所有生命值）',
+    `      ${exampleFence}`,
+  ].join('\n');
+}
+
+function labelForRepo(url, index) {
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    return parts.at(-2) || parts.at(-1) || parsed.hostname || `页面 ${index + 1}`;
+  } catch (error) {
+    return `页面 ${index + 1}`;
+  }
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+}
+
+function StatusBadge({ type = 'neutral', children }) {
+  return <span className={`status-badge ${type}`}>{children}</span>;
+}
+
+function Metric({ value, label }) {
+  return (
+    <div className="metric">
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function App() {
+  const [rawText, setRawText] = useState('');
+  const [data, setData] = useState(EMPTY_DATA);
+  const [parseResult, setParseResult] = useState(null);
+  const [review, setReview] = useState(() => createReviewState([], [], null, ''));
+  const [selectedRepo, setSelectedRepo] = useState(0);
+  const [frameKey, setFrameKey] = useState(0);
+  const [toast, setToast] = useState('');
+
+  const parsed = useMemo(() => validateData(data), [data]);
+  const currentRepoUrl = parsed.repos[selectedRepo] || '';
+  const currentPage = review.pages?.[selectedRepo];
+  const generatedComment = useMemo(
+    () => buildQcComment(review, parsed.repos, parsed.rubrics, parsed.matrix),
+    [review, parsed.repos, parsed.rubrics, parsed.matrix],
+  );
+  const updatedMatrix = useMemo(
+    () => buildUpdatedMatrix(review, parsed.repos, parsed.rubrics, parsed.matrix),
+    [review, parsed.repos, parsed.rubrics, parsed.matrix],
+  );
+  const updatedMatrixText = JSON.stringify(updatedMatrix);
+  const reviewPromptText = useMemo(() => buildRubricsReviewPrompt(data), [data]);
+
+  const stats = useMemo(() => {
+    let visited = 0;
+    let confirmed = 0;
+    let failed = 0;
+    let mismatch = 0;
+    let missingIssue = 0;
+
+    review.pages?.forEach((page, repoIndex) => {
+      if (page.visited) visited += 1;
+      page.checks?.forEach((check, rubricIndex) => {
+        if (check.confirmed) confirmed += 1;
+        if (check.expected === 0) {
+          failed += 1;
+          if (!check.issue.trim()) missingIssue += 1;
+        }
+        const originalScore = getOriginalScore(parsed.matrix, repoIndex, rubricIndex);
+        if (
+          (check.expected === 0 || check.expected === 1) &&
+          originalScore !== null &&
+          originalScore !== check.expected
+        ) {
+          mismatch += 1;
+        }
+      });
+    });
+
+    return {
+      visited,
+      confirmed,
+      failed,
+      mismatch,
+      missingIssue,
+      totalChecks: parsed.repos.length * parsed.rubrics.length,
+    };
+  }, [review, parsed.matrix, parsed.repos.length, parsed.rubrics.length]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+      if (!saved) return;
+      setRawText(saved.rawText || '');
+      setData({ ...EMPTY_DATA, ...(saved.data || {}) });
+      setParseResult(saved.parseResult || null);
+      setReview(saved.review || createReviewState([], [], null, ''));
+      setSelectedRepo(saved.selectedRepo || 0);
+    } catch (error) {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    const payload = { rawText, data, parseResult, review, selectedRepo };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  }, [rawText, data, parseResult, review, selectedRepo]);
+
+  useEffect(() => {
+    if (selectedRepo >= parsed.repos.length) setSelectedRepo(0);
+  }, [parsed.repos.length, selectedRepo]);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(''), 2200);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  function parseAndApply(text = rawText) {
+    const result = parseRawRow(text);
+    const nextData = result.data || EMPTY_DATA;
+    const nextParsed = validateData(nextData);
+    setParseResult(result);
+    setData(nextData);
+    setSelectedRepo(0);
+    setFrameKey((key) => key + 1);
+    setReview(createReviewState(nextParsed.repos, nextParsed.rubrics, nextParsed.matrix, nextData.note));
+    setToast(result.ok ? `已按 ${result.delimiterName} 解析 6 列` : result.errors.join(' '));
+  }
+
+  async function pasteAndParse() {
+    try {
+      const text = await navigator.clipboard.readText();
+      setRawText(text);
+      parseAndApply(text);
+    } catch (error) {
+      setToast('剪贴板读取失败，请手动粘贴。');
+    }
+  }
+
+  function clearAll() {
+    setRawText('');
+    setData(EMPTY_DATA);
+    setParseResult(null);
+    setReview(createReviewState([], [], null, ''));
+    setSelectedRepo(0);
+    setToast('已清空');
+  }
+
+  function updatePage(repoIndex, patch) {
+    setReview((previous) => {
+      const pages = [...(previous.pages || [])];
+      pages[repoIndex] = { ...pages[repoIndex], ...patch };
+      return { ...previous, pages };
+    });
+  }
+
+  function updateCheck(repoIndex, rubricIndex, patch) {
+    setReview((previous) => {
+      const pages = [...(previous.pages || [])];
+      const page = { ...pages[repoIndex] };
+      const checks = [...(page.checks || [])];
+      checks[rubricIndex] = { ...checks[rubricIndex], ...patch };
+      page.checks = checks;
+      pages[repoIndex] = page;
+      return { ...previous, pages };
+    });
+  }
+
+  function confirmOriginalForPage() {
+    if (!currentPage) return;
+    setReview((previous) => {
+      const pages = [...previous.pages];
+      const page = { ...pages[selectedRepo] };
+      page.visited = true;
+      page.checks = parsed.rubrics.map((_, rubricIndex) => {
+        const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
+        const previousCheck = page.checks?.[rubricIndex] || {};
+        return {
+          ...previousCheck,
+          expected: originalScore ?? previousCheck.expected ?? null,
+          confirmed: originalScore !== null,
+        };
+      });
+      pages[selectedRepo] = page;
+      return { ...previous, pages };
+    });
+  }
+
+  function resetCurrentPage() {
+    setReview((previous) => {
+      const pages = [...previous.pages];
+      const page = { ...pages[selectedRepo] };
+      page.visited = false;
+      page.pageNote = '';
+      page.checks = parsed.rubrics.map((_, rubricIndex) => {
+        const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
+        return { expected: originalScore, confirmed: false, issue: '' };
+      });
+      pages[selectedRepo] = page;
+      return { ...previous, pages };
+    });
+  }
+
+  async function copyAndToast(text, message) {
+    try {
+      await copyText(text);
+      setToast(message);
+    } catch (error) {
+      setToast('复制失败，请手动选中文本复制。');
+    }
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <div>
+          <h1>Rubrics 质检工作台</h1>
+          <p>粘贴 6 列数据后，在同一页面完成链接测试、rubrics 核对、评分校准和评论输出。</p>
+        </div>
+        <div className="header-actions">
+          <button className="ghost-button" type="button" onClick={() => copyAndToast(reviewPromptText, '已复制 rubrics 检查模板')}>
+            <Clipboard size={16} />
+            Rubrics 模板
+          </button>
+          <button className="ghost-button danger" type="button" onClick={clearAll}>
+            <Trash2 size={16} />
+            清空
+          </button>
+        </div>
+      </header>
+
+      <section className="input-panel">
+        <div className="section-head">
+          <div>
+            <h2>6 列原始数据</h2>
+            <p>prompt / repo / 任务类型 / rubrics / 评分 / 备注</p>
+          </div>
+          <div className="button-row">
+            <button className="primary-button" type="button" onClick={() => parseAndApply()}>
+              <ListChecks size={16} />
+              解析
+            </button>
+            <button className="ghost-button" type="button" onClick={pasteAndParse}>
+              <ClipboardPaste size={16} />
+              粘贴
+            </button>
+          </div>
+        </div>
+
+        <textarea
+          className="raw-input"
+          value={rawText}
+          onChange={(event) => setRawText(event.target.value)}
+          placeholder="在这里粘贴整行 6 列数据"
+          spellCheck="false"
+        />
+
+        <div className="parse-line">
+          {parseResult ? (
+            <StatusBadge type={parseResult.ok ? 'success' : 'warning'}>
+              {parseResult.ok ? `已解析：${parseResult.delimiterName}` : parseResult.errors.join(' ')}
+            </StatusBadge>
+          ) : (
+            <StatusBadge>等待解析</StatusBadge>
+          )}
+          {parsed.errors.map((error) => (
+            <StatusBadge type="danger" key={error}>
+              {error}
+            </StatusBadge>
+          ))}
+          {parsed.warnings.map((warning) => (
+            <StatusBadge type="warning" key={warning}>
+              {warning}
+            </StatusBadge>
+          ))}
+        </div>
+
+        <div className="field-grid" aria-label="字段预览">
+          {COLS.map((column) => {
+            const value = data[column === '任务类型' ? 'taskType' : column === '评分' ? 'score' : column === '备注' ? 'note' : column] || '';
+            return (
+              <div className="field-card" key={column}>
+                <div className="field-label">
+                  <span>{column}</span>
+                  <strong>{value ? `${value.length} 字` : '空'}</strong>
+                </div>
+                <p>{value || '未填写'}</p>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="metrics-grid" aria-label="质检进度">
+        <Metric value={parsed.repos.length} label="页面链接" />
+        <Metric value={parsed.rubrics.length} label="rubrics 条数" />
+        <Metric value={`${parsed.repos.length}×${parsed.rubrics.length}`} label="应有评分矩阵" />
+        <Metric value={`${stats.visited}/${parsed.repos.length}`} label="已访问页面" />
+        <Metric value={`${stats.confirmed}/${stats.totalChecks}`} label="已确认评分" />
+        <Metric value={stats.failed} label="不符合项" />
+        <Metric value={stats.mismatch} label="评分不一致" />
+        <Metric value={stats.missingIssue} label="缺少问题描述" />
+      </section>
+
+      <main className="workbench-grid">
+        <section className="viewer-panel">
+          <div className="section-head compact">
+            <div>
+              <h2>网页测试</h2>
+              <p>{data.taskType || '未解析任务类型'}</p>
+            </div>
+            <div className="button-row">
+              <button
+                className="icon-button"
+                type="button"
+                title="上一个页面"
+                onClick={() => setSelectedRepo((value) => Math.max(0, value - 1))}
+                disabled={!parsed.repos.length || selectedRepo === 0}
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <button
+                className="icon-button"
+                type="button"
+                title="下一个页面"
+                onClick={() => setSelectedRepo((value) => Math.min(parsed.repos.length - 1, value + 1))}
+                disabled={!parsed.repos.length || selectedRepo >= parsed.repos.length - 1}
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+
+          <div className="repo-list">
+            {parsed.repos.length ? (
+              parsed.repos.map((repoUrl, index) => {
+                const page = review.pages?.[index];
+                const issueCount = page?.checks?.filter((check) => check.expected === 0).length || 0;
+                return (
+                  <button
+                    className={`repo-item ${selectedRepo === index ? 'active' : ''}`}
+                    type="button"
+                    key={repoUrl}
+                    onClick={() => setSelectedRepo(index)}
+                  >
+                    <span className="repo-index">{index + 1}</span>
+                    <span className="repo-text">{labelForRepo(repoUrl, index)}</span>
+                    {page?.visited && <Eye size={15} />}
+                    {issueCount > 0 && <span className="issue-pill">{issueCount}</span>}
+                  </button>
+                );
+              })
+            ) : (
+              <div className="empty-state">解析后显示页面列表</div>
+            )}
+          </div>
+
+          <div className="url-bar">
+            <LinkIcon size={16} />
+            <span>{currentRepoUrl || '未选择页面'}</span>
+            {currentRepoUrl && (
+              <a className="icon-button as-link" href={currentRepoUrl} target="_blank" rel="noreferrer" title="新窗口打开">
+                <ExternalLink size={16} />
+              </a>
+            )}
+            <button
+              className="icon-button"
+              type="button"
+              title="刷新预览"
+              onClick={() => setFrameKey((key) => key + 1)}
+              disabled={!currentRepoUrl}
+            >
+              <RefreshCw size={16} />
+            </button>
+          </div>
+
+          <div className="frame-shell">
+            {currentRepoUrl ? (
+              <iframe key={`${currentRepoUrl}-${frameKey}`} src={currentRepoUrl} title={`第 ${selectedRepo + 1} 个页面`} />
+            ) : (
+              <div className="empty-state large">等待选择待测链接</div>
+            )}
+          </div>
+        </section>
+
+        <section className="review-panel">
+          <div className="section-head compact">
+            <div>
+              <h2>当前页面核查</h2>
+              <p>{parsed.rubrics.length ? `第 ${selectedRepo + 1} 个页面，共 ${parsed.rubrics.length} 条 rubric` : '等待解析 rubrics'}</p>
+            </div>
+            <div className="button-row">
+              <button className="ghost-button" type="button" onClick={confirmOriginalForPage} disabled={!currentPage}>
+                <Check size={16} />
+                确认原评分
+              </button>
+              <button className="ghost-button" type="button" onClick={resetCurrentPage} disabled={!currentPage}>
+                <RotateCcw size={16} />
+                重置本页
+              </button>
+            </div>
+          </div>
+
+          {currentPage ? (
+            <>
+              <label className="check-toggle">
+                <input
+                  type="checkbox"
+                  checked={currentPage.visited}
+                  onChange={(event) => updatePage(selectedRepo, { visited: event.target.checked })}
+                />
+                <span>当前页面已访问测试</span>
+              </label>
+
+              <div className="task-details">
+                <div className="task-summary">
+                  <FileText size={16} />
+                  原始 prompt 与 rubrics 问题
+                </div>
+                <div className="task-copy">
+                  <div>
+                    <h3>原始 Prompt</h3>
+                    <pre>{data.prompt || '未解析 prompt'}</pre>
+                  </div>
+                  <div>
+                    <h3>Rubrics 质量问题</h3>
+                    <textarea
+                      value={review.promptRubricIssues}
+                      onChange={(event) => setReview((previous) => ({ ...previous, promptRubricIssues: event.target.value }))}
+                      placeholder="逐行记录 prompt 与 rubrics 不一致、遗漏、不可判定等问题"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <label className="stacked-label">
+                页面整体问题
+                <textarea
+                  value={currentPage.pageNote}
+                  onChange={(event) => updatePage(selectedRepo, { pageNote: event.target.value })}
+                  placeholder="记录当前页面的整体异常，例如无法打开、白屏、核心交互不可用"
+                />
+              </label>
+
+              <div className="rubric-list">
+                {parsed.rubrics.map((rubric, rubricIndex) => {
+                  const check = currentPage.checks?.[rubricIndex] || {};
+                  const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
+                  const hasMismatch =
+                    (check.expected === 0 || check.expected === 1) &&
+                    originalScore !== null &&
+                    originalScore !== check.expected;
+                  const needsIssue = check.expected === 0 && !check.issue?.trim();
+
+                  return (
+                    <article
+                      className={`rubric-item ${check.expected === 0 ? 'fail' : ''} ${hasMismatch ? 'mismatch' : ''}`}
+                      key={`${selectedRepo}-${rubric.number}-${rubric.text}`}
+                    >
+                      <div className="rubric-head">
+                        <div>
+                          <strong>第 {rubric.number || rubricIndex + 1} 条</strong>
+                          <p>{rubric.text}</p>
+                        </div>
+                        <div className="score-tags">
+                          <StatusBadge type={originalScore === 0 ? 'danger' : originalScore === 1 ? 'success' : 'neutral'}>
+                            原评分 {originalScore ?? '缺失'}
+                          </StatusBadge>
+                          <StatusBadge type={check.confirmed ? 'success' : 'warning'}>
+                            {check.confirmed ? '已确认' : '未确认'}
+                          </StatusBadge>
+                        </div>
+                      </div>
+
+                      <div className="segmented">
+                        <button
+                          type="button"
+                          className={check.expected === 1 ? 'active pass' : ''}
+                          onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: 1, confirmed: true })}
+                        >
+                          <Check size={15} />
+                          应为 1
+                        </button>
+                        <button
+                          type="button"
+                          className={check.expected === 0 ? 'active fail' : ''}
+                          onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: 0, confirmed: true })}
+                        >
+                          <X size={15} />
+                          应为 0
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: null, confirmed: false })}
+                        >
+                          未查
+                        </button>
+                      </div>
+
+                      {check.expected === 0 && (
+                        <textarea
+                          className={needsIssue ? 'needs-input' : ''}
+                          value={check.issue}
+                          onChange={(event) => updateCheck(selectedRepo, rubricIndex, { issue: event.target.value })}
+                          placeholder="写清楚页面哪里没有满足该 rubric"
+                        />
+                      )}
+
+                      {hasMismatch && (
+                        <p className="inline-alert">
+                          <AlertTriangle size={15} />
+                          原评分与质检结论不一致
+                        </p>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div className="empty-state large">解析数据后开始核查</div>
+          )}
+        </section>
+      </main>
+
+      <section className="output-panel">
+        <div className="section-head">
+          <div>
+            <h2>质检输出</h2>
+            <p>评论与修正后的评分矩阵会随核查结果更新</p>
+          </div>
+          <div className="button-row">
+            <button className="primary-button" type="button" onClick={() => copyAndToast(generatedComment, '已复制质检评论')}>
+              <Copy size={16} />
+              复制评论
+            </button>
+            <button className="ghost-button" type="button" onClick={() => copyAndToast(updatedMatrixText, '已复制评分矩阵')}>
+              <Copy size={16} />
+              复制评分
+            </button>
+          </div>
+        </div>
+
+        <div className="output-grid">
+          <label className="stacked-label">
+            质检评论
+            <textarea className="output-textarea" value={generatedComment} readOnly />
+          </label>
+          <div className="output-side">
+            <label className="stacked-label">
+              修正后评分
+              <textarea value={updatedMatrixText} readOnly />
+            </label>
+            <label className="stacked-label">
+              其他质检问题
+              <textarea
+                value={review.finalNote}
+                onChange={(event) => setReview((previous) => ({ ...previous, finalNote: event.target.value }))}
+                placeholder="逐行记录无法归入具体页面或具体 rubric 的问题"
+              />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+export default App;
