@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
-  ChevronLeft,
-  ChevronRight,
   Clipboard,
   ClipboardPaste,
   Copy,
@@ -12,6 +10,9 @@ import {
   FileText,
   Link as LinkIcon,
   ListChecks,
+  Maximize2,
+  Minimize2,
+  Move,
   RefreshCw,
   RotateCcw,
   Trash2,
@@ -19,7 +20,10 @@ import {
 } from 'lucide-react';
 
 const STORAGE_KEY = 'rubrics-qc-workbench.v1';
-const COLS = ['prompt', 'repo', '任务类型', 'rubrics', '评分', '备注'];
+const INITIAL_FLOATING_PANELS = {
+  prompt: { x: 12, y: 132, minimized: false },
+  note: { x: 386, y: 132, minimized: false },
+};
 
 const EMPTY_DATA = {
   prompt: '',
@@ -369,6 +373,10 @@ function splitIssueLines(value) {
     .filter(Boolean);
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function buildUpdatedMatrix(review, repos, rubrics, matrix) {
   return repos.map((_, repoIndex) =>
     rubrics.map((_, rubricIndex) => {
@@ -381,10 +389,9 @@ function buildUpdatedMatrix(review, repos, rubrics, matrix) {
 
 function buildQcComment(review, repos, rubrics, matrix) {
   const lines = [];
+  const promptRubricIssues = String(review.promptRubricIssues || '').trim();
 
-  splitIssueLines(review.promptRubricIssues).forEach((issue) => {
-    lines.push(`- prompt/rubrics 检查 -> ${issue}`);
-  });
+  if (promptRubricIssues) lines.push(promptRubricIssues);
 
   repos.forEach((_, repoIndex) => {
     const page = review.pages?.[repoIndex];
@@ -510,12 +517,27 @@ function StatusBadge({ type = 'neutral', children }) {
   return <span className={`status-badge ${type}`}>{children}</span>;
 }
 
-function Metric({ value, label }) {
+function FloatingPanel({ id, title, icon, panel, onDragStart, onToggleMinimize, children }) {
   return (
-    <div className="metric">
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
+    <aside className={`floating-panel ${panel.minimized ? 'minimized' : ''}`} style={{ left: panel.x, top: panel.y }}>
+      <div className="floating-panel-head" onPointerDown={(event) => onDragStart(id, event)}>
+        <span>
+          <Move size={13} />
+          {icon}
+          <strong>{title}</strong>
+        </span>
+        <button
+          className="icon-button"
+          type="button"
+          title={panel.minimized ? '展开' : '最小化'}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => onToggleMinimize(id)}
+        >
+          {panel.minimized ? <Maximize2 size={14} /> : <Minimize2 size={14} />}
+        </button>
+      </div>
+      {!panel.minimized && <div className="floating-panel-body">{children}</div>}
+    </aside>
   );
 }
 
@@ -527,6 +549,9 @@ function App() {
   const [selectedRepo, setSelectedRepo] = useState(0);
   const [frameKey, setFrameKey] = useState(0);
   const [toast, setToast] = useState('');
+  const [floatingPanels, setFloatingPanels] = useState(INITIAL_FLOATING_PANELS);
+  const [dragPanel, setDragPanel] = useState(null);
+  const [isFrameFullscreen, setIsFrameFullscreen] = useState(false);
 
   const parsed = useMemo(() => validateData(data), [data]);
   const currentRepoUrl = parsed.repos[selectedRepo] || '';
@@ -542,42 +567,6 @@ function App() {
   const updatedMatrixText = JSON.stringify(updatedMatrix);
   const reviewPromptText = useMemo(() => buildRubricsReviewPrompt(data), [data]);
 
-  const stats = useMemo(() => {
-    let visited = 0;
-    let confirmed = 0;
-    let failed = 0;
-    let mismatch = 0;
-    let missingIssue = 0;
-
-    review.pages?.forEach((page, repoIndex) => {
-      if (page.visited) visited += 1;
-      page.checks?.forEach((check, rubricIndex) => {
-        if (check.confirmed) confirmed += 1;
-        if (check.expected === 0) {
-          failed += 1;
-          if (!check.issue.trim()) missingIssue += 1;
-        }
-        const originalScore = getOriginalScore(parsed.matrix, repoIndex, rubricIndex);
-        if (
-          (check.expected === 0 || check.expected === 1) &&
-          originalScore !== null &&
-          originalScore !== check.expected
-        ) {
-          mismatch += 1;
-        }
-      });
-    });
-
-    return {
-      visited,
-      confirmed,
-      failed,
-      mismatch,
-      missingIssue,
-      totalChecks: parsed.repos.length * parsed.rubrics.length,
-    };
-  }, [review, parsed.matrix, parsed.repos.length, parsed.rubrics.length]);
-
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
@@ -587,15 +576,16 @@ function App() {
       setParseResult(saved.parseResult || null);
       setReview(saved.review || createReviewState([], [], null, ''));
       setSelectedRepo(saved.selectedRepo || 0);
+      setFloatingPanels(saved.floatingPanels || INITIAL_FLOATING_PANELS);
     } catch (error) {
       localStorage.removeItem(STORAGE_KEY);
     }
   }, []);
 
   useEffect(() => {
-    const payload = { rawText, data, parseResult, review, selectedRepo };
+    const payload = { rawText, data, parseResult, review, selectedRepo, floatingPanels };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [rawText, data, parseResult, review, selectedRepo]);
+  }, [rawText, data, parseResult, review, selectedRepo, floatingPanels]);
 
   useEffect(() => {
     if (selectedRepo >= parsed.repos.length) setSelectedRepo(0);
@@ -606,6 +596,36 @@ function App() {
     const timer = window.setTimeout(() => setToast(''), 2200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!dragPanel) return undefined;
+
+    function handlePointerMove(event) {
+      setFloatingPanels((previous) => {
+        const maxX = Math.max(8, window.innerWidth - 180);
+        const maxY = Math.max(8, window.innerHeight - 42);
+        return {
+          ...previous,
+          [dragPanel.id]: {
+            ...previous[dragPanel.id],
+            x: clamp(dragPanel.originX + event.clientX - dragPanel.startX, 8, maxX),
+            y: clamp(dragPanel.originY + event.clientY - dragPanel.startY, 8, maxY),
+          },
+        };
+      });
+    }
+
+    function handlePointerUp() {
+      setDragPanel(null);
+    }
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [dragPanel]);
 
   function parseAndApply(text = rawText) {
     const result = parseRawRow(text);
@@ -635,7 +655,29 @@ function App() {
     setParseResult(null);
     setReview(createReviewState([], [], null, ''));
     setSelectedRepo(0);
+    setFloatingPanels(INITIAL_FLOATING_PANELS);
+    setIsFrameFullscreen(false);
     setToast('已清空');
+  }
+
+  function startFloatingDrag(id, event) {
+    if (event.button !== 0) return;
+    const panel = floatingPanels[id];
+    setDragPanel({
+      id,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: panel.x,
+      originY: panel.y,
+    });
+    event.preventDefault();
+  }
+
+  function toggleFloatingPanel(id) {
+    setFloatingPanels((previous) => ({
+      ...previous,
+      [id]: { ...previous[id], minimized: !previous[id].minimized },
+    }));
   }
 
   function updatePage(repoIndex, patch) {
@@ -704,30 +746,38 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="app-header">
-        <div>
-          <h1>Rubrics 质检工作台</h1>
-          <p>粘贴 6 列数据后，在同一页面完成链接测试、rubrics 核对、评分校准和评论输出。</p>
-        </div>
-        <div className="header-actions">
-          <button className="ghost-button" type="button" onClick={() => copyAndToast(reviewPromptText, '已复制 rubrics 检查模板')}>
-            <Clipboard size={16} />
-            Rubrics 模板
-          </button>
-          <button className="ghost-button danger" type="button" onClick={clearAll}>
-            <Trash2 size={16} />
-            清空
-          </button>
-        </div>
-      </header>
-
       <section className="input-panel">
-        <div className="section-head">
+        <div className="section-head input-toolbar">
           <div>
-            <h2>6 列原始数据</h2>
-            <p>prompt / repo / 任务类型 / rubrics / 评分 / 备注</p>
+            <h1>Rubrics 质检工作台</h1>
+            <div className="toolbar-subline">
+              <p>prompt / repo / 任务类型 / rubrics / 评分 / 备注</p>
+              <div className="parse-line inline">
+                {parseResult ? (
+                  <StatusBadge type={parseResult.ok ? 'success' : 'warning'}>
+                    {parseResult.ok ? `已解析：${parseResult.delimiterName}` : parseResult.errors.join(' ')}
+                  </StatusBadge>
+                ) : (
+                  <StatusBadge>等待解析</StatusBadge>
+                )}
+                {parsed.errors.map((error) => (
+                  <StatusBadge type="danger" key={error}>
+                    {error}
+                  </StatusBadge>
+                ))}
+                {parsed.warnings.map((warning) => (
+                  <StatusBadge type="warning" key={warning}>
+                    {warning}
+                  </StatusBadge>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="button-row">
+            <button className="ghost-button" type="button" onClick={() => copyAndToast(reviewPromptText, '已复制 rubrics 质检提示词')}>
+              <Clipboard size={16} />
+              复制rubrics质检提示词
+            </button>
             <button className="primary-button" type="button" onClick={() => parseAndApply()}>
               <ListChecks size={16} />
               解析
@@ -735,6 +785,10 @@ function App() {
             <button className="ghost-button" type="button" onClick={pasteAndParse}>
               <ClipboardPaste size={16} />
               粘贴
+            </button>
+            <button className="ghost-button danger" type="button" onClick={clearAll}>
+              <Trash2 size={16} />
+              清空
             </button>
           </div>
         </div>
@@ -746,83 +800,10 @@ function App() {
           placeholder="在这里粘贴整行 6 列数据"
           spellCheck="false"
         />
-
-        <div className="parse-line">
-          {parseResult ? (
-            <StatusBadge type={parseResult.ok ? 'success' : 'warning'}>
-              {parseResult.ok ? `已解析：${parseResult.delimiterName}` : parseResult.errors.join(' ')}
-            </StatusBadge>
-          ) : (
-            <StatusBadge>等待解析</StatusBadge>
-          )}
-          {parsed.errors.map((error) => (
-            <StatusBadge type="danger" key={error}>
-              {error}
-            </StatusBadge>
-          ))}
-          {parsed.warnings.map((warning) => (
-            <StatusBadge type="warning" key={warning}>
-              {warning}
-            </StatusBadge>
-          ))}
-        </div>
-
-        <div className="field-grid" aria-label="字段预览">
-          {COLS.map((column) => {
-            const value = data[column === '任务类型' ? 'taskType' : column === '评分' ? 'score' : column === '备注' ? 'note' : column] || '';
-            return (
-              <div className="field-card" key={column}>
-                <div className="field-label">
-                  <span>{column}</span>
-                  <strong>{value ? `${value.length} 字` : '空'}</strong>
-                </div>
-                <p>{value || '未填写'}</p>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="metrics-grid" aria-label="质检进度">
-        <Metric value={parsed.repos.length} label="页面链接" />
-        <Metric value={parsed.rubrics.length} label="rubrics 条数" />
-        <Metric value={`${parsed.repos.length}×${parsed.rubrics.length}`} label="应有评分矩阵" />
-        <Metric value={`${stats.visited}/${parsed.repos.length}`} label="已访问页面" />
-        <Metric value={`${stats.confirmed}/${stats.totalChecks}`} label="已确认评分" />
-        <Metric value={stats.failed} label="不符合项" />
-        <Metric value={stats.mismatch} label="评分不一致" />
-        <Metric value={stats.missingIssue} label="缺少问题描述" />
       </section>
 
       <main className="workbench-grid">
-        <section className="viewer-panel">
-          <div className="section-head compact">
-            <div>
-              <h2>网页测试</h2>
-              <p>{data.taskType || '未解析任务类型'}</p>
-            </div>
-            <div className="button-row">
-              <button
-                className="icon-button"
-                type="button"
-                title="上一个页面"
-                onClick={() => setSelectedRepo((value) => Math.max(0, value - 1))}
-                disabled={!parsed.repos.length || selectedRepo === 0}
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <button
-                className="icon-button"
-                type="button"
-                title="下一个页面"
-                onClick={() => setSelectedRepo((value) => Math.min(parsed.repos.length - 1, value + 1))}
-                disabled={!parsed.repos.length || selectedRepo >= parsed.repos.length - 1}
-              >
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          </div>
-
+        <section className={`viewer-panel ${isFrameFullscreen ? 'frame-fullscreen' : ''}`}>
           <div className="repo-list">
             {parsed.repos.length ? (
               parsed.repos.map((repoUrl, index) => {
@@ -864,6 +845,15 @@ function App() {
             >
               <RefreshCw size={16} />
             </button>
+            <button
+              className="icon-button"
+              type="button"
+              title={isFrameFullscreen ? '复原网页窗口' : '全屏显示网页'}
+              onClick={() => setIsFrameFullscreen((value) => !value)}
+              disabled={!currentRepoUrl}
+            >
+              {isFrameFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
           </div>
 
           <div className="frame-shell">
@@ -904,35 +894,24 @@ function App() {
                 <span>当前页面已访问测试</span>
               </label>
 
-              <div className="task-details">
-                <div className="task-summary">
-                  <FileText size={16} />
-                  原始 prompt 与 rubrics 问题
-                </div>
-                <div className="task-copy">
-                  <div>
-                    <h3>原始 Prompt</h3>
-                    <pre>{data.prompt || '未解析 prompt'}</pre>
-                  </div>
-                  <div>
-                    <h3>Rubrics 质量问题</h3>
-                    <textarea
-                      value={review.promptRubricIssues}
-                      onChange={(event) => setReview((previous) => ({ ...previous, promptRubricIssues: event.target.value }))}
-                      placeholder="逐行记录 prompt 与 rubrics 不一致、遗漏、不可判定等问题"
-                    />
-                  </div>
-                </div>
+              <div className="quick-issue-row">
+                <label className="stacked-label">
+                  Rubrics质量问题
+                  <textarea
+                    value={review.promptRubricIssues}
+                    onChange={(event) => setReview((previous) => ({ ...previous, promptRubricIssues: event.target.value }))}
+                    placeholder="粘贴 AI 核查 rubrics 后给出的质量问题"
+                  />
+                </label>
+                <label className="stacked-label">
+                  页面整体问题
+                  <textarea
+                    value={currentPage.pageNote}
+                    onChange={(event) => updatePage(selectedRepo, { pageNote: event.target.value })}
+                    placeholder="记录当前页面的整体异常，例如无法打开、白屏、核心交互不可用"
+                  />
+                </label>
               </div>
-
-              <label className="stacked-label">
-                页面整体问题
-                <textarea
-                  value={currentPage.pageNote}
-                  onChange={(event) => updatePage(selectedRepo, { pageNote: event.target.value })}
-                  placeholder="记录当前页面的整体异常，例如无法打开、白屏、核心交互不可用"
-                />
-              </label>
 
               <div className="rubric-list">
                 {parsed.rubrics.map((rubric, rubricIndex) => {
@@ -1034,8 +1013,7 @@ function App() {
         </div>
 
         <div className="output-grid">
-          <label className="stacked-label">
-            质检评论
+          <label className="stacked-label output-comment-label" aria-label="质检评论">
             <textarea className="output-textarea" value={generatedComment} readOnly />
           </label>
           <div className="output-side">
@@ -1054,6 +1032,28 @@ function App() {
           </div>
         </div>
       </section>
+
+      <FloatingPanel
+        id="prompt"
+        title="原始Prompt"
+        icon={<FileText size={14} />}
+        panel={floatingPanels.prompt}
+        onDragStart={startFloatingDrag}
+        onToggleMinimize={toggleFloatingPanel}
+      >
+        <pre>{data.prompt || '未解析 prompt'}</pre>
+      </FloatingPanel>
+
+      <FloatingPanel
+        id="note"
+        title="备注"
+        icon={<Clipboard size={14} />}
+        panel={floatingPanels.note}
+        onDragStart={startFloatingDrag}
+        onToggleMinimize={toggleFloatingPanel}
+      >
+        <pre>{data.note || '未解析备注'}</pre>
+      </FloatingPanel>
 
       {toast && <div className="toast">{toast}</div>}
     </div>
