@@ -402,7 +402,7 @@ function StatusBadge({ type = 'neutral', children }) {
   return <span className={`status-badge ${type}`}>{children}</span>;
 }
 
-function AnimatedNoteTextarea({ value, onChange, placeholder }) {
+function AnimatedNoteTextarea({ value, onChange, placeholder, hasMissingNote = false, flashToken = 0 }) {
   const wrapRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -425,9 +425,36 @@ function AnimatedNoteTextarea({ value, onChange, placeholder }) {
     return () => animation.kill();
   }, []);
 
+  useEffect(() => {
+    const element = textareaRef.current;
+    if (!element || !hasMissingNote || !flashToken) return undefined;
+
+    gsap.killTweensOf(element);
+    const animation = gsap.fromTo(
+      element,
+      { boxShadow: '0 0 0 0 rgba(220, 38, 38, 0)' },
+      {
+        boxShadow: '0 0 0 4px rgba(220, 38, 38, 0.24)',
+        duration: 0.18,
+        repeat: 3,
+        yoyo: true,
+        ease: 'power1.inOut',
+        clearProps: 'boxShadow',
+      },
+    );
+
+    return () => animation.kill();
+  }, [flashToken, hasMissingNote]);
+
   return (
     <div className="issue-textarea-wrap" ref={wrapRef}>
-      <textarea ref={textareaRef} value={value} onChange={onChange} placeholder={placeholder} />
+      <textarea
+        ref={textareaRef}
+        className={hasMissingNote ? 'missing-note-input' : ''}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+      />
     </div>
   );
 }
@@ -586,6 +613,8 @@ function LabelApp() {
   const [isFrameFullscreen, setIsFrameFullscreen] = useState(false);
   const [repoTitles, setRepoTitles] = useState({});
   const [toast, setToast] = useState('');
+  const [missingNoteKeys, setMissingNoteKeys] = useState({});
+  const [missingNoteFlashToken, setMissingNoteFlashToken] = useState(0);
   const [promptPanel, setPromptPanel] = useState(INITIAL_PROMPT_PANEL);
   const [promptPanelInteraction, setPromptPanelInteraction] = useState(null);
   const rubricListRef = useRef(null);
@@ -929,16 +958,23 @@ function LabelApp() {
     const missingNotes = findMissingZeroScoreNotes(repos, rubrics, scores, notes);
     if (missingNotes.length) {
       const firstMissing = missingNotes[0];
+      const nextMissingNoteKeys = {};
+      missingNotes.forEach(({ repoIndex, rubricIndex }) => {
+        nextMissingNoteKeys[`${repoIndex}:${rubricIndex}`] = true;
+      });
       const listed = missingNotes
         .slice(0, 5)
         .map(({ repoIndex, rubricIndex }) => `第${repoIndex + 1}个页面第${rubricIndex + 1}条rubric`)
         .join('、');
       const suffix = missingNotes.length > 5 ? `等${missingNotes.length}处` : '';
+      setMissingNoteKeys(nextMissingNoteKeys);
+      setMissingNoteFlashToken((value) => value + 1);
       setSelectedRepo(firstMissing.repoIndex);
       setToast(`${listed}${suffix}打了0分但没有填写备注，请补充后再复制。`);
       return;
     }
 
+    setMissingNoteKeys({});
     await copyAndToast(text, message);
   }
 
@@ -1125,6 +1161,7 @@ function LabelApp() {
                     const qcKey = `${selectedRepo}:${rubricIndex}`;
                     const qcIssue = qcIssueMap.get(qcKey);
                     const isResolved = Boolean(resolvedQc[qcKey]);
+                    const hasMissingNote = Boolean(missingNoteKeys[qcKey]) && score === 0 && !String(note).trim();
 
                     return (
                       <article
@@ -1179,6 +1216,8 @@ function LabelApp() {
                             value={note}
                             onChange={(event) => updateNote(selectedRepo, rubricIndex, event.target.value)}
                             placeholder="填写 0 分备注，此内容会进入备注输出"
+                            hasMissingNote={hasMissingNote}
+                            flashToken={missingNoteFlashToken}
                           />
                         )}
                       </article>
