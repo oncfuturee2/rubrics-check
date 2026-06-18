@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { gsap } from 'gsap';
 import {
   AlertTriangle,
   Check,
@@ -6,7 +7,6 @@ import {
   ClipboardPaste,
   Copy,
   ExternalLink,
-  Eye,
   FileText,
   Link as LinkIcon,
   ListChecks,
@@ -20,9 +20,15 @@ import {
 } from 'lucide-react';
 
 const STORAGE_KEY = 'rubrics-qc-workbench.v1';
-const INITIAL_FLOATING_PANELS = {
-  prompt: { x: 12, y: 132, minimized: false },
-  note: { x: 386, y: 132, minimized: false },
+const FLOATING_PANEL_STATE_VERSION = 2;
+const INITIAL_FLOATING_PANEL = {
+  x: 12,
+  y: 132,
+  width: 760,
+  height: 420,
+  split: 0.58,
+  minimized: false,
+  promptMode: 'markdown',
 };
 
 const EMPTY_DATA = {
@@ -377,6 +383,76 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function renderInlineMarkdown(text) {
+  const parts = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = pattern.exec(text))) {
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+    const token = match[0];
+    if (token.startsWith('`')) {
+      parts.push(<code key={`${match.index}-code`}>{token.slice(1, -1)}</code>);
+    } else {
+      parts.push(<strong key={`${match.index}-strong`}>{token.slice(2, -2)}</strong>);
+    }
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts;
+}
+
+function renderMarkdownBlocks(value) {
+  const lines = String(value || '未解析 prompt').split(/\r?\n/);
+  const blocks = [];
+  let listItems = [];
+
+  function flushList() {
+    if (!listItems.length) return;
+    blocks.push(
+      <ul key={`list-${blocks.length}`}>
+        {listItems.map((item, index) => (
+          <li key={`${index}-${item}`}>{renderInlineMarkdown(item)}</li>
+        ))}
+      </ul>,
+    );
+    listItems = [];
+  }
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+
+    if (!trimmed) {
+      flushList();
+      blocks.push(<div className="markdown-spacer" key={`blank-${index}`} />);
+      return;
+    }
+
+    if (heading) {
+      flushList();
+      const level = Math.min(heading[1].length + 2, 6);
+      const HeadingTag = `h${level}`;
+      blocks.push(<HeadingTag key={`heading-${index}`}>{renderInlineMarkdown(heading[2])}</HeadingTag>);
+      return;
+    }
+
+    if (bullet) {
+      listItems.push(bullet[1]);
+      return;
+    }
+
+    flushList();
+    blocks.push(<p key={`p-${index}`}>{renderInlineMarkdown(trimmed)}</p>);
+  });
+
+  flushList();
+  return blocks;
+}
+
 function buildUpdatedMatrix(review, repos, rubrics, matrix) {
   return repos.map((_, repoIndex) =>
     rubrics.map((_, rubricIndex) => {
@@ -396,6 +472,7 @@ function buildQcComment(review, repos, rubrics, matrix) {
   repos.forEach((_, repoIndex) => {
     const page = review.pages?.[repoIndex];
     if (!page) return;
+    const rubricIssues = [];
 
     splitIssueLines(page.pageNote).forEach((issue) => {
       lines.push(`- 第${repoIndex + 1}个页面 -> 页面整体问题 -> ${issue}`);
@@ -413,11 +490,15 @@ function buildQcComment(review, repos, rubrics, matrix) {
       if (expectedScore === 0) {
         const issue = check.issue.trim() || '未填写具体问题描述';
         const scoreText = hasMismatch ? `；原评分为${originalScore}，质检应为0` : '';
-        lines.push(`- 第${repoIndex + 1}个页面 -> 第${rubricNumber}个rubrics -> ${issue}${scoreText}`);
+        rubricIssues.push(`第${rubricNumber}个rubrics -> ${issue}${scoreText}`);
       } else if (expectedScore === 1 && hasMismatch) {
-        lines.push(`- 第${repoIndex + 1}个页面 -> 第${rubricNumber}个rubrics -> 页面符合该条要求，原评分为0，质检应为1`);
+        rubricIssues.push(`第${rubricNumber}个rubrics -> 页面符合该条要求，原评分为0，质检应为1`);
       }
     });
+
+    if (rubricIssues.length) {
+      lines.push(`- 第${repoIndex + 1}个页面 -> ${rubricIssues.join('；')}`);
+    }
   });
 
   splitIssueLines(review.finalNote).forEach((issue) => {
@@ -496,6 +577,25 @@ function labelForRepo(url, index) {
   }
 }
 
+function decodeHtmlText(value) {
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = value;
+  return textarea.value.trim();
+}
+
+function extractPageTitle(htmlText) {
+  const match = String(htmlText || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (!match) return '';
+  return decodeHtmlText(match[1]).replace(/\s+/g, ' ').trim();
+}
+
+async function fetchPageTitle(url, signal) {
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const htmlText = await response.text();
+  return extractPageTitle(htmlText);
+}
+
 async function copyText(text) {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(text);
@@ -517,27 +617,135 @@ function StatusBadge({ type = 'neutral', children }) {
   return <span className={`status-badge ${type}`}>{children}</span>;
 }
 
-function FloatingPanel({ id, title, icon, panel, onDragStart, onToggleMinimize, children }) {
+function CombinedFloatingPanel({
+  panel,
+  prompt,
+  note,
+  onDragStart,
+  onSplitStart,
+  onResizeStart,
+  onToggleMinimize,
+  onPromptModeChange,
+}) {
+  const leftWidth = Math.round(panel.width * panel.split);
+  const rightWidth = Math.max(120, panel.width - leftWidth - 9);
+
   return (
-    <aside className={`floating-panel ${panel.minimized ? 'minimized' : ''}`} style={{ left: panel.x, top: panel.y }}>
-      <div className="floating-panel-head" onPointerDown={(event) => onDragStart(id, event)}>
+    <aside
+      className={`floating-panel combined ${panel.minimized ? 'minimized' : ''}`}
+      style={{
+        left: panel.x,
+        top: panel.y,
+        width: panel.minimized ? undefined : panel.width,
+        height: panel.minimized ? undefined : panel.height,
+      }}
+    >
+      <div className="floating-panel-head" onPointerDown={onDragStart} onDoubleClick={onToggleMinimize}>
         <span>
           <Move size={13} />
-          {icon}
-          <strong>{title}</strong>
+          <FileText size={14} />
+          <strong>Prompt / 备注</strong>
         </span>
+        {!panel.minimized && (
+          <div className="floating-head-actions" onPointerDown={(event) => event.stopPropagation()}>
+            <div className="mini-segmented" aria-label="Prompt 显示模式">
+              <button
+                type="button"
+                className={panel.promptMode === 'raw' ? 'active' : ''}
+                onClick={() => onPromptModeChange('raw')}
+              >
+                原格式
+              </button>
+              <button
+                type="button"
+                className={panel.promptMode === 'markdown' ? 'active' : ''}
+                onClick={() => onPromptModeChange('markdown')}
+              >
+                Markdown
+              </button>
+            </div>
+          </div>
+        )}
         <button
           className="icon-button"
           type="button"
           title={panel.minimized ? '展开' : '最小化'}
           onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => onToggleMinimize(id)}
+          onClick={onToggleMinimize}
         >
           {panel.minimized ? <Maximize2 size={14} /> : <Minimize2 size={14} />}
         </button>
       </div>
-      {!panel.minimized && <div className="floating-panel-body">{children}</div>}
+      {!panel.minimized && (
+        <>
+          <div className="combined-panel-body">
+            <section className="combined-pane prompt-pane" style={{ width: leftWidth }}>
+              <div className="pane-title">原始 Prompt</div>
+              <div className={`prompt-content ${panel.promptMode === 'markdown' ? 'markdown' : ''}`}>
+                {panel.promptMode === 'markdown' ? renderMarkdownBlocks(prompt) : <pre>{prompt || '未解析 prompt'}</pre>}
+              </div>
+            </section>
+            <div
+              className="splitter"
+              role="separator"
+              aria-label="调整 Prompt 和备注宽度"
+              tabIndex={0}
+              onPointerDown={onSplitStart}
+            />
+            <section className="combined-pane note-pane" style={{ width: rightWidth }}>
+              <div className="pane-title">备注</div>
+              <pre>{note || '未解析备注'}</pre>
+            </section>
+          </div>
+          <div className="panel-resize-handle" title="调整窗口大小" onPointerDown={onResizeStart} />
+        </>
+      )}
     </aside>
+  );
+}
+
+function AnimatedIssueTextarea({ className, value, onChange, placeholder }) {
+  const wrapRef = useRef(null);
+  const textareaRef = useRef(null);
+
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const element = textareaRef.current;
+    if (!wrap || !element) return undefined;
+
+    const targetHeight = element.offsetHeight;
+    gsap.killTweensOf(wrap);
+    gsap.set(wrap, {
+      autoAlpha: 0,
+      height: 0,
+      marginTop: 0,
+      overflow: 'hidden',
+    });
+
+    const animation = gsap.to(wrap, {
+      autoAlpha: 1,
+      height: targetHeight,
+      marginTop: 8,
+      duration: 0.26,
+      ease: 'power2.out',
+      onComplete: () => {
+        gsap.set(wrap, { height: 'auto', overflow: 'visible' });
+      },
+    });
+
+    return () => animation.kill();
+  }, []);
+
+  return (
+    <div className="issue-textarea-wrap" ref={wrapRef}>
+      <textarea
+        ref={textareaRef}
+        className={className}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+      />
+    </div>
   );
 }
 
@@ -549,11 +757,14 @@ function App() {
   const [selectedRepo, setSelectedRepo] = useState(0);
   const [frameKey, setFrameKey] = useState(0);
   const [toast, setToast] = useState('');
-  const [floatingPanels, setFloatingPanels] = useState(INITIAL_FLOATING_PANELS);
-  const [dragPanel, setDragPanel] = useState(null);
+  const [floatingPanel, setFloatingPanel] = useState(INITIAL_FLOATING_PANEL);
+  const [panelInteraction, setPanelInteraction] = useState(null);
   const [isFrameFullscreen, setIsFrameFullscreen] = useState(false);
+  const [repoTitles, setRepoTitles] = useState({});
+  const rubricListRef = useRef(null);
 
   const parsed = useMemo(() => validateData(data), [data]);
+  const repoKey = useMemo(() => parsed.repos.join('\n'), [parsed.repos]);
   const currentRepoUrl = parsed.repos[selectedRepo] || '';
   const currentPage = review.pages?.[selectedRepo];
   const generatedComment = useMemo(
@@ -576,16 +787,34 @@ function App() {
       setParseResult(saved.parseResult || null);
       setReview(saved.review || createReviewState([], [], null, ''));
       setSelectedRepo(saved.selectedRepo || 0);
-      setFloatingPanels(saved.floatingPanels || INITIAL_FLOATING_PANELS);
+      const loadedFloatingPanel =
+        saved.floatingPanel ||
+          (saved.floatingPanels?.prompt
+            ? { ...INITIAL_FLOATING_PANEL, ...saved.floatingPanels.prompt }
+            : INITIAL_FLOATING_PANEL);
+      setFloatingPanel({
+        ...loadedFloatingPanel,
+        promptMode: saved.floatingPanelVersion === FLOATING_PANEL_STATE_VERSION ? loadedFloatingPanel.promptMode || 'markdown' : 'markdown',
+      });
+      setRepoTitles(saved.repoTitles || {});
     } catch (error) {
       localStorage.removeItem(STORAGE_KEY);
     }
   }, []);
 
   useEffect(() => {
-    const payload = { rawText, data, parseResult, review, selectedRepo, floatingPanels };
+    const payload = {
+      rawText,
+      data,
+      parseResult,
+      review,
+      selectedRepo,
+      floatingPanel,
+      floatingPanelVersion: FLOATING_PANEL_STATE_VERSION,
+      repoTitles,
+    };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [rawText, data, parseResult, review, selectedRepo, floatingPanels]);
+  }, [rawText, data, parseResult, review, selectedRepo, floatingPanel, repoTitles]);
 
   useEffect(() => {
     if (selectedRepo >= parsed.repos.length) setSelectedRepo(0);
@@ -598,25 +827,105 @@ function App() {
   }, [toast]);
 
   useEffect(() => {
-    if (!dragPanel) return undefined;
+    if (!rubricListRef.current || !currentPage) return undefined;
+    const cards = gsap.utils.toArray(rubricListRef.current.querySelectorAll('.rubric-item'));
+    if (!cards.length) return undefined;
 
-    function handlePointerMove(event) {
-      setFloatingPanels((previous) => {
-        const maxX = Math.max(8, window.innerWidth - 180);
-        const maxY = Math.max(8, window.innerHeight - 42);
+    gsap.killTweensOf(cards);
+    gsap.set(cards, { autoAlpha: 0, y: 14, scale: 0.985 });
+    const animation = gsap.to(cards, {
+      autoAlpha: 1,
+      y: 0,
+      scale: 1,
+      duration: 0.34,
+      stagger: 0.035,
+      ease: 'power2.out',
+      clearProps: 'transform,opacity,visibility',
+    });
+
+    return () => animation.kill();
+  }, [selectedRepo, parsed.rubrics.length]);
+
+  useEffect(() => {
+    function fitFloatingPanelToViewport() {
+      setFloatingPanel((previous) => {
+        const width = clamp(previous.width, 320, Math.max(320, window.innerWidth - 16));
+        const height = clamp(previous.height, 280, Math.max(280, window.innerHeight - 16));
         return {
           ...previous,
-          [dragPanel.id]: {
-            ...previous[dragPanel.id],
-            x: clamp(dragPanel.originX + event.clientX - dragPanel.startX, 8, maxX),
-            y: clamp(dragPanel.originY + event.clientY - dragPanel.startY, 8, maxY),
-          },
+          width,
+          height,
+          x: clamp(previous.x, 8, Math.max(8, window.innerWidth - 180)),
+          y: clamp(previous.y, 8, Math.max(8, window.innerHeight - 42)),
         };
       });
     }
 
+    fitFloatingPanelToViewport();
+    window.addEventListener('resize', fitFloatingPanelToViewport);
+    return () => window.removeEventListener('resize', fitFloatingPanelToViewport);
+  }, []);
+
+  useEffect(() => {
+    if (!parsed.repos.length) {
+      setRepoTitles({});
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setRepoTitles((previous) => {
+      const next = {};
+      parsed.repos.forEach((url) => {
+        if (previous[url]) next[url] = previous[url];
+      });
+      return next;
+    });
+
+    parsed.repos.forEach((url) => {
+      fetchPageTitle(url, controller.signal)
+        .then((title) => {
+          if (!title) return;
+          setRepoTitles((previous) => ({ ...previous, [url]: title }));
+        })
+        .catch(() => {});
+    });
+
+    return () => controller.abort();
+  }, [repoKey]);
+
+  useEffect(() => {
+    if (!panelInteraction) return undefined;
+
+    function handlePointerMove(event) {
+      setFloatingPanel((previous) => {
+        if (panelInteraction.type === 'move') {
+          const maxX = Math.max(8, window.innerWidth - 180);
+          const maxY = Math.max(8, window.innerHeight - 42);
+          return {
+            ...previous,
+            x: clamp(panelInteraction.originX + event.clientX - panelInteraction.startX, 8, maxX),
+            y: clamp(panelInteraction.originY + event.clientY - panelInteraction.startY, 8, maxY),
+          };
+        }
+
+        if (panelInteraction.type === 'split') {
+          const delta = event.clientX - panelInteraction.startX;
+          const split = (panelInteraction.leftWidth + delta) / panelInteraction.width;
+          return { ...previous, split: clamp(split, 0.28, 0.72) };
+        }
+
+        if (panelInteraction.type === 'resize') {
+          const width = clamp(panelInteraction.originWidth + event.clientX - panelInteraction.startX, 320, window.innerWidth - previous.x - 8);
+          const height = clamp(panelInteraction.originHeight + event.clientY - panelInteraction.startY, 280, window.innerHeight - previous.y - 8);
+          return { ...previous, width, height };
+        }
+
+        return previous;
+      });
+    }
+
     function handlePointerUp() {
-      setDragPanel(null);
+      setPanelInteraction(null);
     }
 
     window.addEventListener('pointermove', handlePointerMove);
@@ -625,7 +934,7 @@ function App() {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
     };
-  }, [dragPanel]);
+  }, [panelInteraction]);
 
   function parseAndApply(text = rawText) {
     const result = parseRawRow(text);
@@ -635,6 +944,7 @@ function App() {
     setData(nextData);
     setSelectedRepo(0);
     setFrameKey((key) => key + 1);
+    setRepoTitles({});
     setReview(createReviewState(nextParsed.repos, nextParsed.rubrics, nextParsed.matrix, nextData.note));
     setToast(result.ok ? `已按 ${result.delimiterName} 解析 6 列` : result.errors.join(' '));
   }
@@ -655,29 +965,53 @@ function App() {
     setParseResult(null);
     setReview(createReviewState([], [], null, ''));
     setSelectedRepo(0);
-    setFloatingPanels(INITIAL_FLOATING_PANELS);
+    setFloatingPanel(INITIAL_FLOATING_PANEL);
     setIsFrameFullscreen(false);
+    setRepoTitles({});
     setToast('已清空');
   }
 
-  function startFloatingDrag(id, event) {
+  function startFloatingDrag(event) {
     if (event.button !== 0) return;
-    const panel = floatingPanels[id];
-    setDragPanel({
-      id,
+    setPanelInteraction({
+      type: 'move',
       startX: event.clientX,
       startY: event.clientY,
-      originX: panel.x,
-      originY: panel.y,
+      originX: floatingPanel.x,
+      originY: floatingPanel.y,
     });
     event.preventDefault();
   }
 
-  function toggleFloatingPanel(id) {
-    setFloatingPanels((previous) => ({
-      ...previous,
-      [id]: { ...previous[id], minimized: !previous[id].minimized },
-    }));
+  function startSplitDrag(event) {
+    if (event.button !== 0) return;
+    setPanelInteraction({
+      type: 'split',
+      startX: event.clientX,
+      width: floatingPanel.width,
+      leftWidth: floatingPanel.width * floatingPanel.split,
+    });
+    event.preventDefault();
+  }
+
+  function startResizeDrag(event) {
+    if (event.button !== 0) return;
+    setPanelInteraction({
+      type: 'resize',
+      startX: event.clientX,
+      startY: event.clientY,
+      originWidth: floatingPanel.width,
+      originHeight: floatingPanel.height,
+    });
+    event.preventDefault();
+  }
+
+  function toggleFloatingPanel() {
+    setFloatingPanel((previous) => ({ ...previous, minimized: !previous.minimized }));
+  }
+
+  function setPromptMode(promptMode) {
+    setFloatingPanel((previous) => ({ ...previous, promptMode }));
   }
 
   function updatePage(repoIndex, patch) {
@@ -744,125 +1078,141 @@ function App() {
     }
   }
 
+  function captureIframeTitle(event) {
+    if (!currentRepoUrl) return;
+    try {
+      const title = event.currentTarget.contentDocument?.title?.trim();
+      if (title) setRepoTitles((previous) => ({ ...previous, [currentRepoUrl]: title }));
+    } catch (error) {
+      // Cross-origin iframes cannot expose their document title.
+    }
+  }
+
   return (
     <div className="app-shell">
-      <section className="input-panel">
-        <div className="section-head input-toolbar">
-          <div>
-            <h1>Rubrics 质检工作台</h1>
-            <div className="toolbar-subline">
-              <p>prompt / repo / 任务类型 / rubrics / 评分 / 备注</p>
-              <div className="parse-line inline">
-                {parseResult ? (
-                  <StatusBadge type={parseResult.ok ? 'success' : 'warning'}>
-                    {parseResult.ok ? `已解析：${parseResult.delimiterName}` : parseResult.errors.join(' ')}
-                  </StatusBadge>
-                ) : (
-                  <StatusBadge>等待解析</StatusBadge>
-                )}
-                {parsed.errors.map((error) => (
-                  <StatusBadge type="danger" key={error}>
-                    {error}
-                  </StatusBadge>
-                ))}
-                {parsed.warnings.map((warning) => (
-                  <StatusBadge type="warning" key={warning}>
-                    {warning}
-                  </StatusBadge>
-                ))}
+      <main className="workbench-grid">
+        <section className="left-workspace">
+          <section className="input-panel">
+            <div className="section-head input-toolbar">
+              <div>
+                <h1>Rubrics 质检工作台</h1>
+                <div className="toolbar-subline">
+                  <p>prompt / repo / 任务类型 / rubrics / 评分 / 备注</p>
+                  <div className="parse-line inline">
+                    {parseResult ? (
+                      <StatusBadge type={parseResult.ok ? 'success' : 'warning'}>
+                        {parseResult.ok ? `已解析：${parseResult.delimiterName}` : parseResult.errors.join(' ')}
+                      </StatusBadge>
+                    ) : (
+                      <StatusBadge>等待解析</StatusBadge>
+                    )}
+                    {parsed.errors.map((error) => (
+                      <StatusBadge type="danger" key={error}>
+                        {error}
+                      </StatusBadge>
+                    ))}
+                    {parsed.warnings.map((warning) => (
+                      <StatusBadge type="warning" key={warning}>
+                        {warning}
+                      </StatusBadge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="button-row">
+                <button className="ghost-button" type="button" onClick={() => copyAndToast(reviewPromptText, '已复制 rubrics 质检提示词')}>
+                  <Clipboard size={16} />
+                  rubrics质检提示词
+                </button>
+                <button className="primary-button" type="button" onClick={() => parseAndApply()}>
+                  <ListChecks size={16} />
+                  解析
+                </button>
+                <button className="ghost-button" type="button" onClick={pasteAndParse}>
+                  <ClipboardPaste size={16} />
+                  粘贴
+                </button>
+                <button className="ghost-button danger" type="button" onClick={clearAll}>
+                  <Trash2 size={16} />
+                  清空
+                </button>
               </div>
             </div>
-          </div>
-          <div className="button-row">
-            <button className="ghost-button" type="button" onClick={() => copyAndToast(reviewPromptText, '已复制 rubrics 质检提示词')}>
-              <Clipboard size={16} />
-              复制rubrics质检提示词
-            </button>
-            <button className="primary-button" type="button" onClick={() => parseAndApply()}>
-              <ListChecks size={16} />
-              解析
-            </button>
-            <button className="ghost-button" type="button" onClick={pasteAndParse}>
-              <ClipboardPaste size={16} />
-              粘贴
-            </button>
-            <button className="ghost-button danger" type="button" onClick={clearAll}>
-              <Trash2 size={16} />
-              清空
-            </button>
-          </div>
-        </div>
 
-        <textarea
-          className="raw-input"
-          value={rawText}
-          onChange={(event) => setRawText(event.target.value)}
-          placeholder="在这里粘贴整行 6 列数据"
-          spellCheck="false"
-        />
-      </section>
+            <textarea
+              className="raw-input"
+              value={rawText}
+              onChange={(event) => setRawText(event.target.value)}
+              placeholder="在这里粘贴整行 6 列数据"
+              spellCheck="false"
+            />
+          </section>
 
-      <main className="workbench-grid">
-        <section className={`viewer-panel ${isFrameFullscreen ? 'frame-fullscreen' : ''}`}>
-          <div className="repo-list">
-            {parsed.repos.length ? (
-              parsed.repos.map((repoUrl, index) => {
-                const page = review.pages?.[index];
-                const issueCount = page?.checks?.filter((check) => check.expected === 0).length || 0;
-                return (
-                  <button
-                    className={`repo-item ${selectedRepo === index ? 'active' : ''}`}
-                    type="button"
-                    key={repoUrl}
-                    onClick={() => setSelectedRepo(index)}
-                  >
-                    <span className="repo-index">{index + 1}</span>
-                    <span className="repo-text">{labelForRepo(repoUrl, index)}</span>
-                    {page?.visited && <Eye size={15} />}
-                    {issueCount > 0 && <span className="issue-pill">{issueCount}</span>}
-                  </button>
-                );
-              })
-            ) : (
-              <div className="empty-state">解析后显示页面列表</div>
-            )}
-          </div>
+          <section className={`viewer-panel ${isFrameFullscreen ? 'frame-fullscreen' : ''}`}>
+            <div className="repo-list">
+              {parsed.repos.length ? (
+                parsed.repos.map((repoUrl, index) => {
+                  const page = review.pages?.[index];
+                  const issueCount = page?.checks?.filter((check) => check.expected === 0).length || 0;
+                  return (
+                    <button
+                      className={`repo-item ${selectedRepo === index ? 'active' : ''}`}
+                      type="button"
+                      key={repoUrl}
+                      onClick={() => setSelectedRepo(index)}
+                    >
+                      <span className="repo-index">{index + 1}</span>
+                      <span className="repo-text">{repoTitles[repoUrl] || labelForRepo(repoUrl, index)}</span>
+                      {issueCount > 0 && <span className="issue-pill">{issueCount}</span>}
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="empty-state">解析后显示页面列表</div>
+              )}
+            </div>
 
-          <div className="url-bar">
-            <LinkIcon size={16} />
-            <span>{currentRepoUrl || '未选择页面'}</span>
-            {currentRepoUrl && (
-              <a className="icon-button as-link" href={currentRepoUrl} target="_blank" rel="noreferrer" title="新窗口打开">
-                <ExternalLink size={16} />
-              </a>
-            )}
-            <button
-              className="icon-button"
-              type="button"
-              title="刷新预览"
-              onClick={() => setFrameKey((key) => key + 1)}
-              disabled={!currentRepoUrl}
-            >
-              <RefreshCw size={16} />
-            </button>
-            <button
-              className="icon-button"
-              type="button"
-              title={isFrameFullscreen ? '复原网页窗口' : '全屏显示网页'}
-              onClick={() => setIsFrameFullscreen((value) => !value)}
-              disabled={!currentRepoUrl}
-            >
-              {isFrameFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-            </button>
-          </div>
+            <div className="url-bar">
+              <LinkIcon size={16} />
+              <span>{currentRepoUrl || '未选择页面'}</span>
+              {currentRepoUrl && (
+                <a className="icon-button as-link" href={currentRepoUrl} target="_blank" rel="noreferrer" title="新窗口打开">
+                  <ExternalLink size={16} />
+                </a>
+              )}
+              <button
+                className="icon-button"
+                type="button"
+                title="刷新预览"
+                onClick={() => setFrameKey((key) => key + 1)}
+                disabled={!currentRepoUrl}
+              >
+                <RefreshCw size={16} />
+              </button>
+              <button
+                className="icon-button"
+                type="button"
+                title={isFrameFullscreen ? '复原网页窗口' : '全屏显示网页'}
+                onClick={() => setIsFrameFullscreen((value) => !value)}
+                disabled={!currentRepoUrl}
+              >
+                {isFrameFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
+            </div>
 
-          <div className="frame-shell">
-            {currentRepoUrl ? (
-              <iframe key={`${currentRepoUrl}-${frameKey}`} src={currentRepoUrl} title={`第 ${selectedRepo + 1} 个页面`} />
-            ) : (
-              <div className="empty-state large">等待选择待测链接</div>
-            )}
-          </div>
+            <div className="frame-shell">
+              {currentRepoUrl ? (
+                <iframe
+                  key={`${currentRepoUrl}-${frameKey}`}
+                  src={currentRepoUrl}
+                  title={repoTitles[currentRepoUrl] || `第 ${selectedRepo + 1} 个页面`}
+                  onLoad={captureIframeTitle}
+                />
+              ) : (
+                <div className="empty-state large">等待选择待测链接</div>
+              )}
+            </div>
+          </section>
         </section>
 
         <section className="review-panel">
@@ -885,107 +1235,142 @@ function App() {
 
           {currentPage ? (
             <>
-              <label className="check-toggle">
-                <input
-                  type="checkbox"
-                  checked={currentPage.visited}
-                  onChange={(event) => updatePage(selectedRepo, { visited: event.target.checked })}
-                />
-                <span>当前页面已访问测试</span>
-              </label>
-
-              <div className="quick-issue-row">
-                <label className="stacked-label">
-                  Rubrics质量问题
-                  <textarea
-                    value={review.promptRubricIssues}
-                    onChange={(event) => setReview((previous) => ({ ...previous, promptRubricIssues: event.target.value }))}
-                    placeholder="粘贴 AI 核查 rubrics 后给出的质量问题"
-                  />
-                </label>
-                <label className="stacked-label">
-                  页面整体问题
-                  <textarea
-                    value={currentPage.pageNote}
-                    onChange={(event) => updatePage(selectedRepo, { pageNote: event.target.value })}
+              <div className="review-top-inputs">
+                <div className="quick-issue-row">
+                  <label className="stacked-label">
+                    Rubrics质量问题
+                    <textarea
+                      value={review.promptRubricIssues}
+                      onChange={(event) => setReview((previous) => ({ ...previous, promptRubricIssues: event.target.value }))}
+                      placeholder="粘贴 AI 核查 rubrics 后给出的质量问题"
+                    />
+                  </label>
+                  <label className="stacked-label">
+                    页面整体问题
+                    <textarea
+                      value={currentPage.pageNote}
+                      onChange={(event) => updatePage(selectedRepo, { pageNote: event.target.value })}
                     placeholder="记录当前页面的整体异常，例如无法打开、白屏、核心交互不可用"
                   />
                 </label>
               </div>
+              </div>
 
-              <div className="rubric-list">
-                {parsed.rubrics.map((rubric, rubricIndex) => {
-                  const check = currentPage.checks?.[rubricIndex] || {};
-                  const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
-                  const hasMismatch =
-                    (check.expected === 0 || check.expected === 1) &&
-                    originalScore !== null &&
-                    originalScore !== check.expected;
-                  const needsIssue = check.expected === 0 && !check.issue?.trim();
+              <div className="review-body">
+                <div className="rubric-column">
+                <div className="rubric-list" ref={rubricListRef}>
+                  {parsed.rubrics.map((rubric, rubricIndex) => {
+                    const check = currentPage.checks?.[rubricIndex] || {};
+                    const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
+                    const hasMismatch =
+                      (check.expected === 0 || check.expected === 1) &&
+                      originalScore !== null &&
+                      originalScore !== check.expected;
+                    const needsIssue = check.expected === 0 && !check.issue?.trim();
 
-                  return (
-                    <article
-                      className={`rubric-item ${check.expected === 0 ? 'fail' : ''} ${hasMismatch ? 'mismatch' : ''}`}
-                      key={`${selectedRepo}-${rubric.number}-${rubric.text}`}
-                    >
-                      <div className="rubric-head">
-                        <div>
-                          <strong>第 {rubric.number || rubricIndex + 1} 条</strong>
-                          <p>{rubric.text}</p>
+                    return (
+                      <article
+                        className={`rubric-item ${check.expected === 0 ? 'fail' : ''} ${hasMismatch ? 'mismatch' : ''}`}
+                        key={`${selectedRepo}-${rubric.number}-${rubric.text}`}
+                      >
+                        <div className="rubric-head">
+                          <div>
+                            <strong>第 {rubric.number || rubricIndex + 1} 条</strong>
+                            <p>{rubric.text}</p>
+                          </div>
+                          <div className="score-tags">
+                            <StatusBadge type={originalScore === 0 ? 'danger' : originalScore === 1 ? 'success' : 'neutral'}>
+                              原评分 {originalScore ?? '缺失'}
+                            </StatusBadge>
+                            <StatusBadge type={check.confirmed ? 'success' : 'warning'}>
+                              {check.confirmed ? '已确认' : '未确认'}
+                            </StatusBadge>
+                          </div>
                         </div>
-                        <div className="score-tags">
-                          <StatusBadge type={originalScore === 0 ? 'danger' : originalScore === 1 ? 'success' : 'neutral'}>
-                            原评分 {originalScore ?? '缺失'}
-                          </StatusBadge>
-                          <StatusBadge type={check.confirmed ? 'success' : 'warning'}>
-                            {check.confirmed ? '已确认' : '未确认'}
-                          </StatusBadge>
+
+                        <div className="segmented">
+                          <button
+                            type="button"
+                            className={check.expected === 1 ? 'active pass' : ''}
+                            onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: 1, confirmed: true })}
+                          >
+                            <Check size={15} />
+                            应为 1
+                          </button>
+                          <button
+                            type="button"
+                            className={check.expected === 0 ? 'active fail' : ''}
+                            onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: 0, confirmed: true })}
+                          >
+                            <X size={15} />
+                            应为 0
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: null, confirmed: false })}
+                          >
+                            未查
+                          </button>
                         </div>
-                      </div>
 
-                      <div className="segmented">
-                        <button
-                          type="button"
-                          className={check.expected === 1 ? 'active pass' : ''}
-                          onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: 1, confirmed: true })}
-                        >
-                          <Check size={15} />
-                          应为 1
-                        </button>
-                        <button
-                          type="button"
-                          className={check.expected === 0 ? 'active fail' : ''}
-                          onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: 0, confirmed: true })}
-                        >
-                          <X size={15} />
-                          应为 0
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: null, confirmed: false })}
-                        >
-                          未查
-                        </button>
-                      </div>
+                        {check.expected === 0 && (
+                          <AnimatedIssueTextarea
+                            className={needsIssue ? 'needs-input' : ''}
+                            value={check.issue}
+                            onChange={(event) => updateCheck(selectedRepo, rubricIndex, { issue: event.target.value })}
+                            placeholder="写清楚页面哪里没有满足该 rubric"
+                          />
+                        )}
 
-                      {check.expected === 0 && (
-                        <textarea
-                          className={needsIssue ? 'needs-input' : ''}
-                          value={check.issue}
-                          onChange={(event) => updateCheck(selectedRepo, rubricIndex, { issue: event.target.value })}
-                          placeholder="写清楚页面哪里没有满足该 rubric"
-                        />
-                      )}
+                        {hasMismatch && (
+                          <p className="inline-alert">
+                            <AlertTriangle size={15} />
+                            原评分与质检结论不一致
+                          </p>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
 
-                      {hasMismatch && (
-                        <p className="inline-alert">
-                          <AlertTriangle size={15} />
-                          原评分与质检结论不一致
-                        </p>
-                      )}
-                    </article>
-                  );
-                })}
+                <section className="output-panel">
+                  <div className="section-head">
+                    <div>
+                      <h2>质检输出</h2>
+                      <p>输出区固定在右侧</p>
+                    </div>
+                    <div className="button-row">
+                      <button className="primary-button" type="button" onClick={() => copyAndToast(generatedComment, '已复制质检评论')}>
+                        <Copy size={16} />
+                        复制评论
+                      </button>
+                      <button className="ghost-button" type="button" onClick={() => copyAndToast(updatedMatrixText, '已复制评分矩阵')}>
+                        <Copy size={16} />
+                        复制评分
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="output-grid">
+                    <label className="stacked-label">
+                      其它质检问题
+                      <textarea
+                        value={review.finalNote}
+                        onChange={(event) => setReview((previous) => ({ ...previous, finalNote: event.target.value }))}
+                        placeholder="逐行记录无法归入具体页面或具体 rubric 的问题"
+                      />
+                    </label>
+                    <label className="stacked-label">
+                      修正后评分
+                      <textarea value={updatedMatrixText} readOnly />
+                    </label>
+                    <label className="stacked-label output-comment-label">
+                      质检评论输出
+                      <textarea className="output-textarea" value={generatedComment} readOnly />
+                    </label>
+                  </div>
+                </section>
               </div>
             </>
           ) : (
@@ -994,66 +1379,16 @@ function App() {
         </section>
       </main>
 
-      <section className="output-panel">
-        <div className="section-head">
-          <div>
-            <h2>质检输出</h2>
-            <p>评论与修正后的评分矩阵会随核查结果更新</p>
-          </div>
-          <div className="button-row">
-            <button className="primary-button" type="button" onClick={() => copyAndToast(generatedComment, '已复制质检评论')}>
-              <Copy size={16} />
-              复制评论
-            </button>
-            <button className="ghost-button" type="button" onClick={() => copyAndToast(updatedMatrixText, '已复制评分矩阵')}>
-              <Copy size={16} />
-              复制评分
-            </button>
-          </div>
-        </div>
-
-        <div className="output-grid">
-          <label className="stacked-label output-comment-label" aria-label="质检评论">
-            <textarea className="output-textarea" value={generatedComment} readOnly />
-          </label>
-          <div className="output-side">
-            <label className="stacked-label">
-              修正后评分
-              <textarea value={updatedMatrixText} readOnly />
-            </label>
-            <label className="stacked-label">
-              其他质检问题
-              <textarea
-                value={review.finalNote}
-                onChange={(event) => setReview((previous) => ({ ...previous, finalNote: event.target.value }))}
-                placeholder="逐行记录无法归入具体页面或具体 rubric 的问题"
-              />
-            </label>
-          </div>
-        </div>
-      </section>
-
-      <FloatingPanel
-        id="prompt"
-        title="原始Prompt"
-        icon={<FileText size={14} />}
-        panel={floatingPanels.prompt}
+      <CombinedFloatingPanel
+        panel={floatingPanel}
+        prompt={data.prompt}
+        note={data.note}
         onDragStart={startFloatingDrag}
+        onSplitStart={startSplitDrag}
+        onResizeStart={startResizeDrag}
         onToggleMinimize={toggleFloatingPanel}
-      >
-        <pre>{data.prompt || '未解析 prompt'}</pre>
-      </FloatingPanel>
-
-      <FloatingPanel
-        id="note"
-        title="备注"
-        icon={<Clipboard size={14} />}
-        panel={floatingPanels.note}
-        onDragStart={startFloatingDrag}
-        onToggleMinimize={toggleFloatingPanel}
-      >
-        <pre>{data.note || '未解析备注'}</pre>
-      </FloatingPanel>
+        onPromptModeChange={setPromptMode}
+      />
 
       {toast && <div className="toast">{toast}</div>}
     </div>
