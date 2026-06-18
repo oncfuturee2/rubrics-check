@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import http from 'node:http';
 import https from 'node:https';
+import { resolve } from 'node:path';
 
 function extractPageTitle(htmlText) {
   const match = String(htmlText || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i);
@@ -87,4 +88,12 @@ function pageTitleMiddleware() {
 
 export default defineConfig({
   plugins: [react(), pageTitleMiddleware()],
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        label: resolve(__dirname, 'label/index.html'),
+      },
+    },
+  },
 });

@@ -1,0 +1,172 @@
+.label-app .label-panel .section-head.compact {
+  flex: 0 0 auto;
+}
+
+.label-app .review-body {
+  grid-template-columns: minmax(330px, 0.95fr) minmax(320px, 0.82fr);
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.label-top-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+  gap: 8px;
+  flex: 0 0 auto;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.label-top-inputs textarea {
+  height: 74px;
+  min-height: 74px;
+  max-height: 74px;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono CJK SC", monospace;
+}
+
+.rubric-edit {
+  min-height: 44px;
+  margin: 0;
+  padding: 7px 9px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.label-app .rubric-head > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.qc-note {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.qc-note.resolved {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.qc-note-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.qc-note strong {
+  color: #1d4ed8;
+}
+
+.qc-note-head label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.qc-note-head input {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--success);
+}
+
+.qc-note p {
+  color: #1e3a8a;
+}
+
+.repo-item.needs-repair {
+  border-color: rgba(220, 38, 38, 0.72);
+  background: #fff1f2;
+}
+
+.repo-item.needs-repair.active {
+  border-color: rgba(220, 38, 38, 0.92);
+  background: #ffe4e6;
+}
+
+.repair-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 20px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.add-rubric-row {
+  flex: 0 0 auto;
+  padding-top: 8px;
+}
+
+.add-rubric-row .primary-button {
+  width: 100%;
+}
+
+.label-output-grid {
+  grid-template-rows: minmax(112px, 0.74fr) minmax(82px, 0.38fr) minmax(104px, 0.54fr);
+  gap: 6px;
+}
+
+.label-output-grid > .stacked-label {
+  gap: 4px;
+}
+
+.label-output-grid textarea {
+  font-size: 12px;
+}
+
+.label-output-panel .section-head p {
+  display: none;
+}
+
+.label-output-panel {
+  padding: 6px 8px 8px;
+}
+
+.label-output-panel .section-head {
+  margin-bottom: 4px;
+}
+
+.prompt-floating-panel {
+  min-width: 320px;
+  min-height: 220px;
+}
+
+.prompt-floating-body {
+  height: calc(100% - 34px);
+  overflow: auto;
+  padding: 10px;
+}
+
+.prompt-floating-body .prompt-content {
+  min-height: 100%;
+}
+
+.prompt-floating-body pre {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 760px) {
+  .label-top-inputs {
+    grid-template-columns: 1fr;
+  }
+
+  .label-app .review-body {
+    grid-template-columns: 1fr;
+  }
+}
