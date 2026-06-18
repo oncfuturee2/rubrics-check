@@ -43,30 +43,44 @@ function App() {
     }
   }
 
+  const appIcon = info?.mode === "label" ? "/tomato.svg" : "/cabbage.svg";
+
   return (
     <main className="launcher-shell">
-      <section className="launcher-card">
-        <div className="eyebrow">{info?.mode === "label" ? "Label Workbench" : "QC Workbench"}</div>
-        <h1>{info?.title || "Rubrics 工作台"}</h1>
-        <p className="description">
-          双击运行后会在本机启动一个临时服务器。复制地址或直接用 Chrome 打开，即可访问对应工作台页面。
-        </p>
+      <section className="launcher-panel">
+        <div className="title-row">
+          <img className="app-icon" src={appIcon} alt="" aria-hidden="true" />
+          <div>
+            <h1>{info?.title || "Rubrics 工作台"}</h1>
+            <p>{info?.mode === "label" ? "标注工作台" : "质检工作台"}</p>
+          </div>
+        </div>
 
-        <label className="address-field">
-          <span>服务器地址</span>
-          <input value={info?.url || ""} readOnly placeholder="等待服务器启动" />
-        </label>
+        <div className="settings-group">
+          <div className="settings-row">
+            <div className="row-copy">
+              <strong>本地服务</strong>
+              <span>{message}</span>
+            </div>
+            <span className={`status-dot ${info?.url ? "ready" : ""}`} />
+          </div>
 
-        <div className="actions">
+          <label className="settings-row address-row">
+            <div className="row-copy">
+              <strong>服务器地址</strong>
+              <input value={info?.url || ""} readOnly placeholder="等待服务器启动" />
+            </div>
+          </label>
+        </div>
+
+        <div className="command-bar">
           <button type="button" className="secondary-button" onClick={copyAddress} disabled={!info?.url}>
             复制地址
           </button>
           <button type="button" className="primary-button" onClick={openChrome} disabled={!info?.url}>
-            在 Chrome 浏览器中打开
+            在 Chrome 中打开
           </button>
         </div>
-
-        <div className="status-line">{message}</div>
       </section>
     </main>
   );

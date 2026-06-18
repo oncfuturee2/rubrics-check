@@ -319,6 +319,20 @@ function buildNoteOutput(repos, rubrics, scores, notes) {
   return lines.join('\n');
 }
 
+function findMissingZeroScoreNotes(repos, rubrics, scores, notes) {
+  const missing = [];
+
+  repos.forEach((_, repoIndex) => {
+    rubrics.forEach((_, rubricIndex) => {
+      if (scores?.[repoIndex]?.[rubricIndex] !== 0) return;
+      if (String(notes?.[repoIndex]?.[rubricIndex] || '').trim()) return;
+      missing.push({ repoIndex, rubricIndex });
+    });
+  });
+
+  return missing;
+}
+
 function escapeTsvCell(value) {
   const text = String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   if (!/[\t\n"]/.test(text)) return text;
@@ -911,6 +925,23 @@ function LabelApp() {
     }
   }
 
+  async function copyResultAndToast(text, message) {
+    const missingNotes = findMissingZeroScoreNotes(repos, rubrics, scores, notes);
+    if (missingNotes.length) {
+      const firstMissing = missingNotes[0];
+      const listed = missingNotes
+        .slice(0, 5)
+        .map(({ repoIndex, rubricIndex }) => `第${repoIndex + 1}个页面第${rubricIndex + 1}条rubric`)
+        .join('、');
+      const suffix = missingNotes.length > 5 ? `等${missingNotes.length}处` : '';
+      setSelectedRepo(firstMissing.repoIndex);
+      setToast(`${listed}${suffix}打了0分但没有填写备注，请补充后再复制。`);
+      return;
+    }
+
+    await copyAndToast(text, message);
+  }
+
   function captureIframeTitle(event) {
     if (!currentRepoUrl) return;
     try {
@@ -1054,11 +1085,11 @@ function LabelApp() {
                 <Copy size={16} />
                 复制rubrics
               </button>
-              <button className="ghost-button" type="button" onClick={() => copyAndToast(scoreOutput, '已复制评分')}>
+              <button className="ghost-button" type="button" onClick={() => copyResultAndToast(scoreOutput, '已复制评分')}>
                 <Copy size={16} />
                 复制评分
               </button>
-              <button className="ghost-button" type="button" onClick={() => copyAndToast(noteOutput, '已复制备注')}>
+              <button className="ghost-button" type="button" onClick={() => copyResultAndToast(noteOutput, '已复制备注')}>
                 <Copy size={16} />
                 复制备注
               </button>
@@ -1172,7 +1203,7 @@ function LabelApp() {
                   <p>复制标准格式数据</p>
                 </div>
                 <div className="button-row">
-                  <button className="primary-button" type="button" onClick={() => copyAndToast(tableRowOutput, '已按表格格式复制 rubrics / 评分 / 备注')}>
+                  <button className="primary-button" type="button" onClick={() => copyResultAndToast(tableRowOutput, '已按表格格式复制 rubrics / 评分 / 备注')}>
                     <Copy size={16} />
                     复制全部
                   </button>

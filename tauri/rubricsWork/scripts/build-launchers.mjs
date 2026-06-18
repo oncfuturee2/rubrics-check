@@ -23,16 +23,17 @@ console.log("dist-launchers/rubrics-qc.exe 与 dist-launchers/rubrics-label.exe 
 
 function buildLauncher(iconSvg, targetName) {
   run(process.execPath, ["scripts/generate-app-icons.mjs", iconSvg], { shell: false });
-  runCargoBuild();
+  runTauriBuildWithoutBundle();
   copyLauncher(targetName);
 }
 
-function runCargoBuild() {
-  if (process.platform === "win32") {
-    run("cmd.exe", ["/C", "cargo build --release --manifest-path src-tauri/Cargo.toml 2>&1"], { shell: false });
-  } else {
-    run("cargo", ["build", "--release", "--manifest-path", "src-tauri/Cargo.toml"], { shell: false });
-  }
+function runTauriBuildWithoutBundle() {
+  run(npm, ["run", "tauri", "--", "build", "--no-bundle"], {
+    env: {
+      ...process.env,
+      RUBRICS_SKIP_TAURI_BEFORE_BUILD: "1",
+    },
+  });
 }
 
 function copyLauncher(targetName) {

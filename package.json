@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "build:exe": "npm --prefix tauri/rubricsWork run build:exe"
   },
   "dependencies": {
     "gsap": "^3.15.0",
