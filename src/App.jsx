@@ -21,6 +21,7 @@ import {
 
 const STORAGE_KEY = 'rubrics-qc-workbench.v1';
 const FLOATING_PANEL_STATE_VERSION = 2;
+const REPO_TITLE_STATE_VERSION = 2;
 const INITIAL_FLOATING_PANEL = {
   x: 12,
   y: 132,
@@ -57,6 +58,12 @@ const RUBRICS_RULES = `# Rubrics标注
 
 数量建议：
 - 4 到 10条，优先保留最重要的显式要求
+
+## 特殊规则：UI 使用中文评分项
+- 若整套 rubric 条目总数≤9 条，将 UI 中文项单独列为一条评分标准
+- 无法单独拆分时：
+  1. 原有 rubric 中包含 UI / 界面设计相关条目，则归入该条目下评分
+  2. 无界面相关条目，则合并至风格类 rubric 内评判
 
 ## 示例
 prompt:
@@ -364,7 +371,9 @@ function createReviewState(repos, rubrics, matrix, noteText, previous = {}) {
           return {
             expected: previousCheck?.expected ?? originalScore,
             confirmed: Boolean(previousCheck?.confirmed),
-            issue: previousCheck?.issue ?? (originalScore === 0 ? seededIssue : ''),
+            issue: previousCheck?.issue ?? '',
+            annotationNote: previousCheck?.annotationNote ?? seededIssue,
+            noteOpen: Boolean(previousCheck?.noteOpen),
           };
         }),
       };
@@ -485,14 +494,13 @@ function buildQcComment(review, repos, rubrics, matrix) {
       const originalScore = getOriginalScore(matrix, repoIndex, rubricIndex);
       const expectedScore = check.expected;
       const rubricNumber = rubric.number || rubricIndex + 1;
-      const hasMismatch = (expectedScore === 0 || expectedScore === 1) && originalScore !== null && originalScore !== expectedScore;
+      const hasMismatch = (expectedScore === 0 || expectedScore === 1) && originalScore !== expectedScore;
+      const hasQcNote = hasMismatch || check.noteOpen;
 
-      if (expectedScore === 0) {
-        const issue = check.issue.trim() || '未填写具体问题描述';
-        const scoreText = hasMismatch ? `；原评分为${originalScore}，质检应为0` : '';
-        rubricIssues.push(`第${rubricNumber}个rubrics -> ${issue}${scoreText}`);
-      } else if (expectedScore === 1 && hasMismatch) {
-        rubricIssues.push(`第${rubricNumber}个rubrics -> 页面符合该条要求，原评分为0，质检应为1`);
+      if (hasQcNote) {
+        const reason = check.issue.trim() || '未填写质检理由';
+        const scoreCorrection = hasMismatch ? `【分数应修改为${expectedScore}分】` : '';
+        rubricIssues.push(`第${rubricNumber}个rubrics -> ${reason}${scoreCorrection}`);
       }
     });
 
@@ -561,8 +569,8 @@ function buildRubricsReviewPrompt(data) {
     '      - rubrics 未提及游戏标题《几何防线》',
     '      - prompt 明确要求"用 React 框架实现"，但 rubrics 未包含',
     '      - 按规则，不满 10 条时中文要求需单独列为一条，但当前 rubrics 未包含',
-    '      - 第 1 条缺少"点射塔（正方形）、溅射塔（圆形）、减速塔（三角形）"的具体类型对应',
-    '      - 第 8 条缺少失败条件描述（敌人到达基地，消耗完所有生命值）',
+    '      - 第 1 条rubrics缺少"点射塔（正方形）、溅射塔（圆形）、减速塔（三角形）"的具体类型对应',
+    '      - 第 8 条rubrics缺少失败条件描述（敌人到达基地，消耗完所有生命值）',
     `      ${exampleFence}`,
   ].join('\n');
 }
@@ -590,6 +598,16 @@ function extractPageTitle(htmlText) {
 }
 
 async function fetchPageTitle(url, signal) {
+  try {
+    const proxied = await fetch(`/api/page-title?url=${encodeURIComponent(url)}`, { signal });
+    if (proxied.ok) {
+      const data = await proxied.json();
+      if (data.title) return data.title;
+    }
+  } catch (error) {
+    // Fall back to direct browser fetch below.
+  }
+
   const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const htmlText = await response.text();
@@ -765,6 +783,7 @@ function App() {
 
   const parsed = useMemo(() => validateData(data), [data]);
   const repoKey = useMemo(() => parsed.repos.join('\n'), [parsed.repos]);
+  const annotationNotes = useMemo(() => parseRemarkIssues(data.note), [data.note]);
   const currentRepoUrl = parsed.repos[selectedRepo] || '';
   const currentPage = review.pages?.[selectedRepo];
   const generatedComment = useMemo(
@@ -796,7 +815,7 @@ function App() {
         ...loadedFloatingPanel,
         promptMode: saved.floatingPanelVersion === FLOATING_PANEL_STATE_VERSION ? loadedFloatingPanel.promptMode || 'markdown' : 'markdown',
       });
-      setRepoTitles(saved.repoTitles || {});
+      setRepoTitles(saved.repoTitleVersion === REPO_TITLE_STATE_VERSION ? saved.repoTitles || {} : {});
     } catch (error) {
       localStorage.removeItem(STORAGE_KEY);
     }
@@ -812,6 +831,7 @@ function App() {
       floatingPanel,
       floatingPanelVersion: FLOATING_PANEL_STATE_VERSION,
       repoTitles,
+      repoTitleVersion: REPO_TITLE_STATE_VERSION,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   }, [rawText, data, parseResult, review, selectedRepo, floatingPanel, repoTitles]);
@@ -1062,7 +1082,7 @@ function App() {
       page.pageNote = '';
       page.checks = parsed.rubrics.map((_, rubricIndex) => {
         const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
-        return { expected: originalScore, confirmed: false, issue: '' };
+        return { expected: originalScore, confirmed: false, issue: '', noteOpen: false };
       });
       pages[selectedRepo] = page;
       return { ...previous, pages };
@@ -1264,9 +1284,11 @@ function App() {
                     const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
                     const hasMismatch =
                       (check.expected === 0 || check.expected === 1) &&
-                      originalScore !== null &&
                       originalScore !== check.expected;
-                    const needsIssue = check.expected === 0 && !check.issue?.trim();
+                    const annotationNote =
+                      check.annotationNote || annotationNotes.get(`${selectedRepo}:${rubricIndex}`) || '';
+                    const showQcReason = hasMismatch || check.noteOpen;
+                    const needsIssue = showQcReason && !check.issue?.trim();
 
                     return (
                       <article
@@ -1285,10 +1307,17 @@ function App() {
                             <StatusBadge type={check.confirmed ? 'success' : 'warning'}>
                               {check.confirmed ? '已确认' : '未确认'}
                             </StatusBadge>
-                          </div>
                         </div>
+                      </div>
 
-                        <div className="segmented">
+                      {annotationNote && (
+                        <div className="annotation-note">
+                          <strong>标注备注</strong>
+                          <p>{annotationNote}</p>
+                        </div>
+                      )}
+
+                      <div className="segmented">
                           <button
                             type="button"
                             className={check.expected === 1 ? 'active pass' : ''}
@@ -1305,28 +1334,28 @@ function App() {
                             <X size={15} />
                             应为 0
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: null, confirmed: false })}
-                          >
-                            未查
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          className={check.noteOpen && !hasMismatch ? 'active note' : ''}
+                          onClick={() => updateCheck(selectedRepo, rubricIndex, { noteOpen: !check.noteOpen, confirmed: true })}
+                        >
+                          添加备注
+                        </button>
+                      </div>
 
-                        {check.expected === 0 && (
-                          <AnimatedIssueTextarea
-                            className={needsIssue ? 'needs-input' : ''}
-                            value={check.issue}
-                            onChange={(event) => updateCheck(selectedRepo, rubricIndex, { issue: event.target.value })}
-                            placeholder="写清楚页面哪里没有满足该 rubric"
-                          />
-                        )}
-
-                        {hasMismatch && (
-                          <p className="inline-alert">
-                            <AlertTriangle size={15} />
-                            原评分与质检结论不一致
-                          </p>
+                        {showQcReason && (
+                          <>
+                            <AnimatedIssueTextarea
+                              className={needsIssue ? 'needs-input' : ''}
+                              value={check.issue}
+                              onChange={(event) => updateCheck(selectedRepo, rubricIndex, { issue: event.target.value })}
+                              placeholder={hasMismatch ? '填写改分质检理由，此内容会输出给标注员' : '填写备注修改建议，此内容会输出给标注员'}
+                            />
+                            <p className="inline-alert">
+                              <AlertTriangle size={15} />
+                              {hasMismatch ? '原评分与质检结论不一致，需填写质检理由' : '评分未改，将作为备注修改建议输出'}
+                            </p>
+                          </>
                         )}
                       </article>
                     );
