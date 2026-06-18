@@ -357,6 +357,7 @@ function createReviewState(repos, rubrics, matrix, noteText, previous = {}) {
   const remarkIssues = parseRemarkIssues(noteText);
   return {
     promptRubricIssues: previous.promptRubricIssues || '',
+    rubricIssueOpen: previous.rubricIssueOpen || {},
     finalNote: previous.finalNote || '',
     pages: repos.map((_, repoIndex) => {
       const previousPage = previous.pages?.[repoIndex] || {};
@@ -386,6 +387,40 @@ function splitIssueLines(value) {
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^[-*]\s*/, ''))
     .filter(Boolean);
+}
+
+function parseRubricQualityIssues(value) {
+  const issueMap = new Map();
+
+  splitIssueLines(value).forEach((line) => {
+    const match = line.match(/^第\s*(\d+)\s*(?:条|个)\s*rub(?:rics|tics)?\s*->\s*(.+)$/i);
+    if (!match) return;
+    issueMap.set(Number(match[1]) - 1, match[2].trim());
+  });
+
+  return issueMap;
+}
+
+function formatRubricQualityIssue(rubricIndex, note) {
+  return `- 第${rubricIndex + 1}条rubrics -> ${String(note || '').trim()}`;
+}
+
+function updateRubricQualityIssueText(text, rubricIndex, note) {
+  const nextNote = String(note || '').trim();
+  let found = false;
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .flatMap((line) => {
+    const body = line.trim().replace(/^[-*]\s*/, '');
+    const match = body.match(/^第\s*(\d+)\s*(?:条|个)\s*rub(?:rics|tics)?\s*->\s*(.*)$/i);
+    if (!match || Number(match[1]) - 1 !== rubricIndex) return [line];
+    found = true;
+    return nextNote ? [formatRubricQualityIssue(rubricIndex, nextNote)] : [];
+  });
+
+  if (!found && nextNote) lines.push(formatRubricQualityIssue(rubricIndex, nextNote));
+  return lines.join('\n');
 }
 
 function clamp(value, min, max) {
@@ -476,7 +511,9 @@ function buildQcComment(review, repos, rubrics, matrix) {
   const lines = [];
   const promptRubricIssues = String(review.promptRubricIssues || '').trim();
 
-  if (promptRubricIssues) lines.push(promptRubricIssues);
+  splitIssueLines(promptRubricIssues).forEach((issue) => {
+    lines.push(`- ${issue}`);
+  });
 
   repos.forEach((_, repoIndex) => {
     const page = review.pages?.[repoIndex];
@@ -784,6 +821,7 @@ function App() {
   const parsed = useMemo(() => validateData(data), [data]);
   const repoKey = useMemo(() => parsed.repos.join('\n'), [parsed.repos]);
   const annotationNotes = useMemo(() => parseRemarkIssues(data.note), [data.note]);
+  const rubricQualityIssues = useMemo(() => parseRubricQualityIssues(review.promptRubricIssues), [review.promptRubricIssues]);
   const currentRepoUrl = parsed.repos[selectedRepo] || '';
   const currentPage = review.pages?.[selectedRepo];
   const generatedComment = useMemo(
@@ -1054,6 +1092,27 @@ function App() {
     });
   }
 
+  function toggleRubricIssue(rubricIndex) {
+    setReview((previous) => ({
+      ...previous,
+      rubricIssueOpen: {
+        ...(previous.rubricIssueOpen || {}),
+        [rubricIndex]: !previous.rubricIssueOpen?.[rubricIndex],
+      },
+    }));
+  }
+
+  function updateRubricQualityIssue(rubricIndex, note) {
+    setReview((previous) => ({
+      ...previous,
+      promptRubricIssues: updateRubricQualityIssueText(previous.promptRubricIssues, rubricIndex, note),
+      rubricIssueOpen: {
+        ...(previous.rubricIssueOpen || {}),
+        [rubricIndex]: true,
+      },
+    }));
+  }
+
   function confirmOriginalForPage() {
     if (!currentPage) return;
     setReview((previous) => {
@@ -1287,6 +1346,8 @@ function App() {
                       originalScore !== check.expected;
                     const annotationNote =
                       check.annotationNote || annotationNotes.get(`${selectedRepo}:${rubricIndex}`) || '';
+                    const rubricQualityIssue = rubricQualityIssues.get(rubricIndex) || '';
+                    const showRubricIssue = Boolean(review.rubricIssueOpen?.[rubricIndex] || rubricQualityIssue);
                     const showQcReason = hasMismatch || check.noteOpen;
                     const needsIssue = showQcReason && !check.issue?.trim();
 
@@ -1299,6 +1360,13 @@ function App() {
                           <div>
                             <strong>第 {rubric.number || rubricIndex + 1} 条</strong>
                             <p>{rubric.text}</p>
+                            <button
+                              type="button"
+                              className={`rubric-note-toggle ${showRubricIssue ? 'active' : ''}`}
+                              onClick={() => toggleRubricIssue(rubricIndex)}
+                            >
+                              rubrics备注
+                            </button>
                           </div>
                           <div className="score-tags">
                             <StatusBadge type={originalScore === 0 ? 'danger' : originalScore === 1 ? 'success' : 'neutral'}>
@@ -1309,6 +1377,15 @@ function App() {
                             </StatusBadge>
                         </div>
                       </div>
+
+                      {showRubricIssue && (
+                        <AnimatedIssueTextarea
+                          className="rubric-quality-textarea"
+                          value={rubricQualityIssue}
+                          onChange={(event) => updateRubricQualityIssue(rubricIndex, event.target.value)}
+                          placeholder="填写 rubrics 修改建议，此内容会同步到上方 Rubrics质量问题"
+                        />
+                      )}
 
                       {annotationNote && (
                         <div className="annotation-note">

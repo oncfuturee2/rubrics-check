@@ -38,6 +38,19 @@
   min-width: 0;
 }
 
+.rubric-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.rubric-actions .icon-button {
+  width: 28px;
+  height: 28px;
+  gap: 1px;
+  font-size: 12px;
+}
+
 .qc-note {
   border-color: #bfdbfe;
   background: #eff6ff;
@@ -78,6 +91,13 @@
 
 .qc-note p {
   color: #1e3a8a;
+  white-space: pre-wrap;
+}
+
+.qc-summary-list {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
 .repo-item.needs-repair {

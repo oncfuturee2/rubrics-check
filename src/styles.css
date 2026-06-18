@@ -616,6 +616,30 @@ button:active {
   font-size: 13px;
 }
 
+.rubric-note-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  margin-top: 8px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: var(--blue);
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.rubric-note-toggle.active {
+  border-color: #93c5fd;
+  background: #dbeafe;
+}
+
+.rubric-quality-textarea {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+
 .score-tags {
   display: flex;
   flex: 0 0 auto;

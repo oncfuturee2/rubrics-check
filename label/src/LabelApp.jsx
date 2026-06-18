@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { gsap } from 'gsap';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   Check,
   ClipboardPaste,
   Copy,
@@ -258,6 +260,29 @@ function parseRemarkIssues(noteText) {
   return issueMap;
 }
 
+function parseQcIssueMessage(rawMessage) {
+  const raw = String(rawMessage || '').trim();
+  let message = raw;
+  const scoreMatch = message.match(/【分数应修改为([01])分】/);
+  const targetScore = scoreMatch ? Number(scoreMatch[1]) : null;
+  message = message.replace(/【分数应修改为[01]分】/g, '').trim();
+  return { message, rawMessage: raw, targetScore };
+}
+
+function addQcIssue(issueMap, key, issue) {
+  const existing = issueMap.get(key);
+  if (!existing) {
+    issueMap.set(key, issue);
+    return;
+  }
+
+  issueMap.set(key, {
+    message: [existing.message, issue.message].filter(Boolean).join('\n'),
+    rawMessage: [existing.rawMessage, issue.rawMessage].filter(Boolean).join('\n'),
+    targetScore: issue.targetScore ?? existing.targetScore,
+  });
+}
+
 function parseQcComment(commentText) {
   const issueMap = new Map();
   const lines = String(commentText || '')
@@ -266,23 +291,119 @@ function parseQcComment(commentText) {
     .filter(Boolean);
 
   lines.forEach((line) => {
+    const globalRubricMatch = line.match(/^第\s*(\d+)\s*(?:条|个)\s*rub(?:rics|tics)?\s*->\s*(.+)$/i);
+    if (globalRubricMatch) {
+      addQcIssue(issueMap, `rubric:${Number(globalRubricMatch[1]) - 1}`, parseQcIssueMessage(globalRubricMatch[2]));
+      return;
+    }
+
+    const otherMatch = line.match(/^其他质检问题\s*->\s*(.+)$/);
+    if (otherMatch) {
+      addQcIssue(issueMap, 'other', parseQcIssueMessage(otherMatch[1]));
+      return;
+    }
+
     const pageMatch = line.match(/第\s*(\d+)\s*个页面/);
     if (!pageMatch) return;
     const pageIndex = Number(pageMatch[1]) - 1;
 
+    const pageIssueMatch = line.match(/页面整体问题\s*->\s*(.+)$/);
+    if (pageIssueMatch) {
+      addQcIssue(issueMap, `page:${pageIndex}`, parseQcIssueMessage(pageIssueMatch[1]));
+      return;
+    }
+
     const matches = [...line.matchAll(/第\s*(\d+)\s*个\s*rub(?:rics|tics)?\s*->\s*([^；;]+)/gi)];
     matches.forEach((match) => {
       const rubricIndex = Number(match[1]) - 1;
-      const rawMessage = match[2].trim();
-      let message = rawMessage;
-      const scoreMatch = message.match(/【分数应修改为([01])分】/);
-      const targetScore = scoreMatch ? Number(scoreMatch[1]) : null;
-      message = message.replace(/【分数应修改为[01]分】/g, '').trim();
-      issueMap.set(`${pageIndex}:${rubricIndex}`, { message, rawMessage, targetScore });
+      addQcIssue(issueMap, `${pageIndex}:${rubricIndex}`, parseQcIssueMessage(match[2]));
     });
   });
 
   return issueMap;
+}
+
+function buildMoveIndexMap(length, fromIndex, toIndex) {
+  const order = Array.from({ length }, (_, index) => index);
+  const [moved] = order.splice(fromIndex, 1);
+  order.splice(toIndex, 0, moved);
+  const indexMap = new Map();
+  order.forEach((oldIndex, newIndex) => indexMap.set(oldIndex, newIndex));
+  return indexMap;
+}
+
+function buildRemoveIndexMap(length, removedIndex) {
+  const indexMap = new Map();
+  Array.from({ length }, (_, index) => index).forEach((oldIndex) => {
+    if (oldIndex === removedIndex) indexMap.set(oldIndex, null);
+    else indexMap.set(oldIndex, oldIndex > removedIndex ? oldIndex - 1 : oldIndex);
+  });
+  return indexMap;
+}
+
+function reorderByIndexMap(items, indexMap) {
+  const next = [];
+  (items || []).forEach((item, oldIndex) => {
+    const newIndex = indexMap.get(oldIndex);
+    if (newIndex === null || newIndex === undefined) return;
+    next[newIndex] = item;
+  });
+  return next.filter((item) => item !== undefined);
+}
+
+function rewriteRubricSegmentIndex(segment, indexMap) {
+  const match = segment.match(/^(\s*)第\s*(\d+)\s*(条|个)\s*rub(?:rics|tics)?\s*->\s*(.+)$/i);
+  if (!match) return segment;
+  const newIndex = indexMap.get(Number(match[2]) - 1);
+  if (newIndex === null || newIndex === undefined) return '';
+  return `${match[1]}第${newIndex + 1}${match[3]}rubrics -> ${match[4].trim()}`;
+}
+
+function rewriteQcCommentRubricIndexes(commentText, indexMap) {
+  return String(commentText || '')
+    .split(/\r?\n/)
+    .map((line) => {
+      const bullet = line.match(/^(\s*[-*]\s*)/);
+      const prefix = bullet ? bullet[1] : '';
+      const body = line.trim().replace(/^[-*]\s*/, '');
+      if (!body) return '';
+
+      const global = rewriteRubricSegmentIndex(body, indexMap);
+      if (!global) return '';
+      if (global !== body) return `${prefix}${global}`;
+
+      const pageMatch = body.match(/^(第\s*\d+\s*个页面\s*->\s*)(.+)$/);
+      if (!pageMatch || !/rub(?:rics|tics)?/i.test(pageMatch[2])) return line;
+
+      const segments = pageMatch[2]
+        .split(/[；;]/)
+        .map((segment) => rewriteRubricSegmentIndex(segment.trim(), indexMap))
+        .filter(Boolean);
+      if (!segments.length) return '';
+      return `${prefix}${pageMatch[1]}${segments.join('；')}`;
+    })
+    .filter((line) => line.trim())
+    .join('\n');
+}
+
+function remapQcStateKeys(state, indexMap) {
+  const next = {};
+  Object.entries(state || {}).forEach(([key, value]) => {
+    const globalMatch = key.match(/^rubric:(\d+)$/);
+    const pageMatch = key.match(/^(\d+):(\d+)$/);
+    const match = globalMatch || pageMatch;
+    if (!match) {
+      next[key] = value;
+      return;
+    }
+
+    const oldRubricIndex = Number(globalMatch ? match[1] : match[2]);
+    const newRubricIndex = indexMap.get(oldRubricIndex);
+    if (newRubricIndex === null || newRubricIndex === undefined) return;
+    const nextKey = globalMatch ? `rubric:${newRubricIndex}` : `${match[1]}:${newRubricIndex}`;
+    next[nextKey] = value;
+  });
+  return next;
 }
 
 function normalizeMatrix(repos, rubrics, matrix, defaultScore = 1) {
@@ -642,6 +763,8 @@ function LabelApp() {
     [finalRubricsText, scoreOutput, noteOutput],
   );
   const hasMissingNoteErrors = Object.keys(missingNoteKeys).length > 0;
+  const currentPageIssue = qcIssueMap.get(`page:${selectedRepo}`);
+  const otherQcIssue = qcIssueMap.get('other');
 
   useEffect(() => {
     try {
@@ -945,14 +1068,37 @@ function LabelApp() {
     });
   }
 
+  function applyRubricIndexMap(indexMap) {
+    setQcComment((previous) => rewriteQcCommentRubricIndexes(previous, indexMap));
+    setResolvedQc((previous) => remapQcStateKeys(previous, indexMap));
+    setMissingNoteKeys((previous) => remapQcStateKeys(previous, indexMap));
+    setScrollTarget(null);
+  }
+
   function removeRubric(rubricIndex) {
+    const indexMap = buildRemoveIndexMap(rubrics.length, rubricIndex);
     setRubrics((previous) => {
-      const next = previous.filter((_, index) => index !== rubricIndex);
+      const next = reorderByIndexMap(previous, indexMap);
       setRubricsText(buildRubricsText(next));
-      setScores((oldScores) => oldScores.map((row) => row.filter((_, index) => index !== rubricIndex)));
-      setNotes((oldNotes) => oldNotes.map((row) => row.filter((_, index) => index !== rubricIndex)));
+      setScores((oldScores) => oldScores.map((row) => reorderByIndexMap(row, indexMap)));
+      setNotes((oldNotes) => oldNotes.map((row) => reorderByIndexMap(row, indexMap)));
       return next;
     });
+    applyRubricIndexMap(indexMap);
+  }
+
+  function moveRubric(rubricIndex, direction) {
+    const nextIndex = rubricIndex + direction;
+    if (nextIndex < 0 || nextIndex >= rubrics.length) return;
+    const indexMap = buildMoveIndexMap(rubrics.length, rubricIndex, nextIndex);
+    setRubrics((previous) => {
+      const next = reorderByIndexMap(previous, indexMap);
+      setRubricsText(buildRubricsText(next));
+      setScores((oldScores) => oldScores.map((row) => reorderByIndexMap(row, indexMap)));
+      setNotes((oldNotes) => oldNotes.map((row) => reorderByIndexMap(row, indexMap)));
+      return next;
+    });
+    applyRubricIndexMap(indexMap);
   }
 
   function clearMissingNoteKey(repoIndex, rubricIndex) {
@@ -1076,16 +1222,20 @@ function LabelApp() {
     }
   }
 
-  function toggleResolvedQc(repoIndex, rubricIndex, checked) {
-    const key = `${repoIndex}:${rubricIndex}`;
+  function toggleResolvedQc(repoIndexOrKey, rubricIndex, checked) {
+    const key = rubricIndex === null ? repoIndexOrKey : `${repoIndexOrKey}:${rubricIndex}`;
     setResolvedQc((previous) => ({ ...previous, [key]: checked }));
   }
 
   function getPendingQcCount(repoIndex) {
     let count = 0;
+    const pageKey = `page:${repoIndex}`;
+    if (qcIssueMap.has(pageKey) && !resolvedQc[pageKey]) count += 1;
     rubrics.forEach((_, rubricIndex) => {
       const key = `${repoIndex}:${rubricIndex}`;
+      const globalKey = `rubric:${rubricIndex}`;
       if (qcIssueMap.has(key) && !resolvedQc[key]) count += 1;
+      if (qcIssueMap.has(globalKey) && !resolvedQc[globalKey]) count += 1;
     });
     return count;
   }
@@ -1241,19 +1391,58 @@ function LabelApp() {
 
           <div className="review-body">
             <div className="rubric-column">
+              {(currentPageIssue || otherQcIssue) && (
+                <div className="qc-summary-list">
+                  {currentPageIssue && (
+                    <div className={`annotation-note qc-note ${resolvedQc[`page:${selectedRepo}`] ? 'resolved' : ''}`}>
+                      <div className="qc-note-head">
+                        <strong>页面整体问题</strong>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(resolvedQc[`page:${selectedRepo}`])}
+                            onChange={(event) => toggleResolvedQc(`page:${selectedRepo}`, null, event.target.checked)}
+                          />
+                          已修改
+                        </label>
+                      </div>
+                      <p>{currentPageIssue.rawMessage || currentPageIssue.message}</p>
+                    </div>
+                  )}
+                  {otherQcIssue && (
+                    <div className={`annotation-note qc-note ${resolvedQc.other ? 'resolved' : ''}`}>
+                      <div className="qc-note-head">
+                        <strong>其他质检问题</strong>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(resolvedQc.other)}
+                            onChange={(event) => toggleResolvedQc('other', null, event.target.checked)}
+                          />
+                          已修改
+                        </label>
+                      </div>
+                      <p>{otherQcIssue.rawMessage || otherQcIssue.message}</p>
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="rubric-list" ref={rubricListRef}>
                 {rubrics.length ? (
                   rubrics.map((rubric, rubricIndex) => {
                     const score = scores[selectedRepo]?.[rubricIndex] ?? 1;
                     const note = notes[selectedRepo]?.[rubricIndex] || '';
                     const qcKey = `${selectedRepo}:${rubricIndex}`;
-                    const qcIssue = qcIssueMap.get(qcKey);
-                    const isResolved = Boolean(resolvedQc[qcKey]);
+                    const rubricQcKey = `rubric:${rubricIndex}`;
+                    const qcIssues = [
+                      { key: rubricQcKey, title: 'Rubrics质检评论', issue: qcIssueMap.get(rubricQcKey) },
+                      { key: qcKey, title: '页面质检评论', issue: qcIssueMap.get(qcKey) },
+                    ].filter((item) => item.issue);
                     const hasMissingNote = Boolean(missingNoteKeys[qcKey]) && score === 0 && !String(note).trim();
 
                     return (
                       <article
-                        className={`rubric-item ${score === 0 ? 'fail' : ''} ${qcIssue ? 'mismatch' : ''}`}
+                        className={`rubric-item ${score === 0 ? 'fail' : ''} ${qcIssues.length ? 'mismatch' : ''}`}
                         data-rubric-index={rubricIndex}
                         key={`${rubric.id}-${selectedRepo}`}
                       >
@@ -1267,27 +1456,47 @@ function LabelApp() {
                               placeholder="填写 rubric 内容"
                             />
                           </div>
-                          <button className="icon-button" type="button" title="删除 rubric" onClick={() => removeRubric(rubricIndex)}>
-                            <Trash2 size={15} />
-                          </button>
+                          <div className="rubric-actions">
+                            <button
+                              className="icon-button"
+                              type="button"
+                              title="上移 rubric"
+                              onClick={() => moveRubric(rubricIndex, -1)}
+                              disabled={rubricIndex === 0}
+                            >
+                              <ArrowUp size={15} />
+                            </button>
+                            <button
+                              className="icon-button"
+                              type="button"
+                              title="下移 rubric"
+                              onClick={() => moveRubric(rubricIndex, 1)}
+                              disabled={rubricIndex === rubrics.length - 1}
+                            >
+                              <ArrowDown size={15} />
+                            </button>
+                            <button className="icon-button" type="button" title="删除 rubric" onClick={() => removeRubric(rubricIndex)}>
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
                         </div>
 
-                        {qcIssue && (
-                          <div className={`annotation-note qc-note ${isResolved ? 'resolved' : ''}`}>
+                        {qcIssues.map(({ key, title, issue }) => (
+                          <div className={`annotation-note qc-note ${resolvedQc[key] ? 'resolved' : ''}`} key={key}>
                             <div className="qc-note-head">
-                              <strong>质检评论</strong>
+                              <strong>{title}</strong>
                               <label>
                                 <input
                                   type="checkbox"
-                                  checked={isResolved}
-                                  onChange={(event) => toggleResolvedQc(selectedRepo, rubricIndex, event.target.checked)}
+                                  checked={Boolean(resolvedQc[key])}
+                                  onChange={(event) => toggleResolvedQc(key, null, event.target.checked)}
                                 />
                                 已修改
                               </label>
                             </div>
-                            <p>{qcIssue.rawMessage || qcIssue.message || '需要修改该条 rubric'}</p>
+                            <p>{issue.rawMessage || issue.message || '需要修改该条 rubric'}</p>
                           </div>
-                        )}
+                        ))}
 
                         <div className="segmented">
                           <button className={score === 1 ? 'active pass' : ''} type="button" onClick={() => updateScore(selectedRepo, rubricIndex, 1)}>
