@@ -432,19 +432,28 @@ function AnimatedNoteTextarea({ value, onChange, placeholder, hasMissingNote = f
     gsap.killTweensOf(element);
     const animation = gsap.fromTo(
       element,
-      { boxShadow: '0 0 0 0 rgba(220, 38, 38, 0)' },
+      { borderColor: '#dc2626', backgroundColor: '#fff1f2', boxShadow: '0 0 0 0 rgba(220, 38, 38, 0)' },
       {
-        boxShadow: '0 0 0 4px rgba(220, 38, 38, 0.24)',
-        duration: 0.18,
-        repeat: 3,
+        borderColor: '#ef4444',
+        backgroundColor: '#ffe4e6',
+        boxShadow: '0 0 0 7px rgba(220, 38, 38, 0.36)',
+        duration: 0.15,
+        repeat: 5,
         yoyo: true,
         ease: 'power1.inOut',
-        clearProps: 'boxShadow',
+        clearProps: 'borderColor,backgroundColor,boxShadow',
       },
     );
 
     return () => animation.kill();
   }, [flashToken, hasMissingNote]);
+
+  useEffect(() => {
+    const element = textareaRef.current;
+    if (!element || hasMissingNote) return;
+    gsap.killTweensOf(element);
+    gsap.set(element, { clearProps: 'borderColor,backgroundColor,boxShadow' });
+  }, [hasMissingNote]);
 
   return (
     <div className="issue-textarea-wrap" ref={wrapRef}>
@@ -615,9 +624,11 @@ function LabelApp() {
   const [toast, setToast] = useState('');
   const [missingNoteKeys, setMissingNoteKeys] = useState({});
   const [missingNoteFlashToken, setMissingNoteFlashToken] = useState(0);
+  const [scrollTarget, setScrollTarget] = useState(null);
   const [promptPanel, setPromptPanel] = useState(INITIAL_PROMPT_PANEL);
   const [promptPanelInteraction, setPromptPanelInteraction] = useState(null);
   const rubricListRef = useRef(null);
+  const noteOutputRef = useRef(null);
 
   const repos = useMemo(() => parseRepoList(data.repo), [data.repo]);
   const repoKey = useMemo(() => repos.join('\n'), [repos]);
@@ -630,6 +641,7 @@ function LabelApp() {
     () => buildTableRowOutput(finalRubricsText, scoreOutput, noteOutput),
     [finalRubricsText, scoreOutput, noteOutput],
   );
+  const hasMissingNoteErrors = Object.keys(missingNoteKeys).length > 0;
 
   useEffect(() => {
     try {
@@ -699,6 +711,27 @@ function LabelApp() {
     const timer = window.setTimeout(() => setToast(''), 2200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    setMissingNoteKeys((previous) => {
+      const previousKeys = Object.keys(previous);
+      if (!previousKeys.length) return previous;
+
+      const currentMissing = new Set(findMissingZeroScoreNotes(repos, rubrics, scores, notes).map(({ repoIndex, rubricIndex }) => `${repoIndex}:${rubricIndex}`));
+      const next = {};
+      previousKeys.forEach((key) => {
+        if (currentMissing.has(key)) next[key] = true;
+      });
+
+      const nextKeys = Object.keys(next);
+      if (nextKeys.length === previousKeys.length && nextKeys.every((key) => previous[key])) return previous;
+      return next;
+    });
+  }, [repos, rubrics, scores, notes]);
+
+  useEffect(() => {
+    if (!hasMissingNoteErrors) setScrollTarget(null);
+  }, [hasMissingNoteErrors]);
 
   useEffect(() => {
     function keepPanelInViewport() {
@@ -803,6 +836,47 @@ function LabelApp() {
     return () => animation.kill();
   }, [selectedRepo, rubrics.length]);
 
+  useEffect(() => {
+    const element = noteOutputRef.current;
+    if (!element || !missingNoteFlashToken || !hasMissingNoteErrors) return undefined;
+
+    gsap.killTweensOf(element);
+    const animation = gsap.fromTo(
+      element,
+      { borderColor: '#dc2626', backgroundColor: '#fff1f2', boxShadow: '0 0 0 0 rgba(220, 38, 38, 0)' },
+      {
+        borderColor: '#ef4444',
+        backgroundColor: '#ffe4e6',
+        boxShadow: '0 0 0 7px rgba(220, 38, 38, 0.32)',
+        duration: 0.16,
+        repeat: 5,
+        yoyo: true,
+        ease: 'power1.inOut',
+        clearProps: 'borderColor,backgroundColor,boxShadow',
+      },
+    );
+
+    return () => animation.kill();
+  }, [missingNoteFlashToken, hasMissingNoteErrors]);
+
+  useEffect(() => {
+    if (hasMissingNoteErrors || !noteOutputRef.current) return;
+    gsap.killTweensOf(noteOutputRef.current);
+    gsap.set(noteOutputRef.current, { clearProps: 'borderColor,backgroundColor,boxShadow' });
+  }, [hasMissingNoteErrors]);
+
+  useEffect(() => {
+    if (!scrollTarget || scrollTarget.repoIndex !== selectedRepo || !rubricListRef.current) return undefined;
+
+    const timer = window.setTimeout(() => {
+      const card = rubricListRef.current?.querySelector(`[data-rubric-index="${scrollTarget.rubricIndex}"]`);
+      if (!card) return;
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [scrollTarget, selectedRepo, missingNoteFlashToken]);
+
   function applyParsedData(result) {
     const nextRepos = parseRepoList(result.data.repo);
     const nextRubrics = parseRubricItems(result.data.rubrics || '');
@@ -881,12 +955,23 @@ function LabelApp() {
     });
   }
 
+  function clearMissingNoteKey(repoIndex, rubricIndex) {
+    const key = `${repoIndex}:${rubricIndex}`;
+    setMissingNoteKeys((previous) => {
+      if (!previous[key]) return previous;
+      const next = { ...previous };
+      delete next[key];
+      return next;
+    });
+  }
+
   function updateScore(repoIndex, rubricIndex, score) {
     setScores((previous) => {
       const next = normalizeMatrix(repos, rubrics, previous);
       next[repoIndex][rubricIndex] = score;
       return next;
     });
+    if (score !== 0) clearMissingNoteKey(repoIndex, rubricIndex);
   }
 
   function updateNote(repoIndex, rubricIndex, note) {
@@ -895,6 +980,7 @@ function LabelApp() {
       next[repoIndex][rubricIndex] = note;
       return next;
     });
+    if (String(note || '').trim()) clearMissingNoteKey(repoIndex, rubricIndex);
   }
 
   function clearAll() {
@@ -969,12 +1055,14 @@ function LabelApp() {
       const suffix = missingNotes.length > 5 ? `等${missingNotes.length}处` : '';
       setMissingNoteKeys(nextMissingNoteKeys);
       setMissingNoteFlashToken((value) => value + 1);
+      setScrollTarget(firstMissing);
       setSelectedRepo(firstMissing.repoIndex);
       setToast(`${listed}${suffix}打了0分但没有填写备注，请补充后再复制。`);
       return;
     }
 
     setMissingNoteKeys({});
+    setScrollTarget(null);
     await copyAndToast(text, message);
   }
 
@@ -1166,6 +1254,7 @@ function LabelApp() {
                     return (
                       <article
                         className={`rubric-item ${score === 0 ? 'fail' : ''} ${qcIssue ? 'mismatch' : ''}`}
+                        data-rubric-index={rubricIndex}
                         key={`${rubric.id}-${selectedRepo}`}
                       >
                         <div className="rubric-head">
@@ -1260,7 +1349,12 @@ function LabelApp() {
                 </label>
                 <label className="stacked-label output-comment-label">
                   备注
-                  <textarea className="output-textarea" value={noteOutput} readOnly />
+                  <textarea
+                    ref={noteOutputRef}
+                    className={`output-textarea ${hasMissingNoteErrors ? 'missing-note-output' : ''}`}
+                    value={noteOutput}
+                    readOnly
+                  />
                 </label>
               </div>
             </section>
