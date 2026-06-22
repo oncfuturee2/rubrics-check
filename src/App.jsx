@@ -15,9 +15,11 @@ import {
   Move,
   RefreshCw,
   RotateCcw,
+  Settings,
   Trash2,
   X,
 } from 'lucide-react';
+import defaultRubricsReviewTemplate from '../prompt.md?raw';
 
 const STORAGE_KEY = 'rubrics-qc-workbench.v1';
 const FLOATING_PANEL_STATE_VERSION = 2;
@@ -40,6 +42,8 @@ const EMPTY_DATA = {
   score: '',
   note: '',
 };
+
+const DEFAULT_RUBRICS_REVIEW_TEMPLATE = defaultRubricsReviewTemplate.trim();
 
 const RUBRICS_RULES = `# Rubrics标注
 根据prompt写成高质量的Rubrics，明确整理并描述各项得分点，形成清晰的评分依据。更准确地识别前端生成结果是否满足需求，以及满足到了什么程度。关键就是输出的rubrics能够将核心内容“东西做没做成，关键点做没做对”量化成可以打分的评判依据，将笼统的prompt描述变成严格定义且没有歧义的打分单位，rubrics里的每一点就是对prompt里的要求的完成情况的给分点。
@@ -452,6 +456,8 @@ function renderMarkdownBlocks(value) {
   const lines = String(value || '未解析 prompt').split(/\r?\n/);
   const blocks = [];
   let listItems = [];
+  let codeFence = null;
+  let codeLines = [];
 
   function flushList() {
     if (!listItems.length) return;
@@ -465,8 +471,37 @@ function renderMarkdownBlocks(value) {
     listItems = [];
   }
 
+  function flushCode() {
+    if (!codeFence) return;
+    blocks.push(
+      <pre className="markdown-code-block" key={`code-${blocks.length}`}>
+        <code>{codeLines.join('\n')}</code>
+      </pre>,
+    );
+    codeFence = null;
+    codeLines = [];
+  }
+
   lines.forEach((line, index) => {
     const trimmed = line.trim();
+    const fence = trimmed.match(/^(`{3,}|~{3,})/);
+
+    if (codeFence) {
+      if (fence && fence[1][0] === codeFence[0] && fence[1].length >= codeFence.length) {
+        flushCode();
+      } else {
+        codeLines.push(line);
+      }
+      return;
+    }
+
+    if (fence) {
+      flushList();
+      codeFence = fence[1];
+      codeLines = [];
+      return;
+    }
+
     const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
     const bullet = trimmed.match(/^[-*]\s+(.+)$/);
 
@@ -493,6 +528,7 @@ function renderMarkdownBlocks(value) {
     blocks.push(<p key={`p-${index}`}>{renderInlineMarkdown(trimmed)}</p>);
   });
 
+  flushCode();
   flushList();
   return blocks;
 }
@@ -610,6 +646,12 @@ function buildRubricsReviewPrompt(data) {
     '      - 第 8 条rubrics缺少失败条件描述（敌人到达基地，消耗完所有生命值）',
     `      ${exampleFence}`,
   ].join('\n');
+}
+
+function buildRubricsReviewTemplateOutput(template, data) {
+  return String(template || '')
+    .replaceAll('&{prompt}', data.prompt || '')
+    .replaceAll('&{rubrics}', data.rubrics || '');
 }
 
 function labelForRepo(url, index) {
@@ -804,6 +846,51 @@ function AnimatedIssueTextarea({ className, value, onChange, placeholder }) {
   );
 }
 
+function PromptTemplateModal({ template, previewText, onChange, onClose, onReset }) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="template-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="rubrics质检提示词设置"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="template-modal-head">
+          <div>
+            <h2>rubrics质检提示词设置</h2>
+            <p>占位符：&amp;{'{prompt}'} / &amp;{'{rubrics}'}</p>
+          </div>
+          <div className="button-row">
+            <button className="ghost-button" type="button" onClick={onReset}>
+              <RotateCcw size={16} />
+              恢复初始模板
+            </button>
+            <button className="icon-button" type="button" title="关闭" onClick={onClose}>
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        <div className="template-modal-body">
+          <label className="stacked-label template-editor">
+            原始模板
+            <textarea
+              value={template}
+              onChange={(event) => onChange(event.target.value)}
+              spellCheck="false"
+            />
+          </label>
+          <section className="template-preview">
+            <div className="template-preview-title">Markdown预览</div>
+            <div className="prompt-content markdown">{renderMarkdownBlocks(previewText || ' ')}</div>
+          </section>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [rawText, setRawText] = useState('');
   const [data, setData] = useState(EMPTY_DATA);
@@ -816,6 +903,8 @@ function App() {
   const [panelInteraction, setPanelInteraction] = useState(null);
   const [isFrameFullscreen, setIsFrameFullscreen] = useState(false);
   const [repoTitles, setRepoTitles] = useState({});
+  const [reviewPromptTemplate, setReviewPromptTemplate] = useState(DEFAULT_RUBRICS_REVIEW_TEMPLATE);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const rubricListRef = useRef(null);
 
   const parsed = useMemo(() => validateData(data), [data]);
@@ -833,7 +922,10 @@ function App() {
     [review, parsed.repos, parsed.rubrics, parsed.matrix],
   );
   const updatedMatrixText = JSON.stringify(updatedMatrix);
-  const reviewPromptText = useMemo(() => buildRubricsReviewPrompt(data), [data]);
+  const reviewPromptText = useMemo(
+    () => buildRubricsReviewTemplateOutput(reviewPromptTemplate, data),
+    [reviewPromptTemplate, data],
+  );
 
   useEffect(() => {
     try {
@@ -844,6 +936,7 @@ function App() {
       setParseResult(saved.parseResult || null);
       setReview(saved.review || createReviewState([], [], null, ''));
       setSelectedRepo(saved.selectedRepo || 0);
+      setReviewPromptTemplate(saved.reviewPromptTemplate || DEFAULT_RUBRICS_REVIEW_TEMPLATE);
       const loadedFloatingPanel =
         saved.floatingPanel ||
           (saved.floatingPanels?.prompt
@@ -866,13 +959,14 @@ function App() {
       parseResult,
       review,
       selectedRepo,
+      reviewPromptTemplate,
       floatingPanel,
       floatingPanelVersion: FLOATING_PANEL_STATE_VERSION,
       repoTitles,
       repoTitleVersion: REPO_TITLE_STATE_VERSION,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [rawText, data, parseResult, review, selectedRepo, floatingPanel, repoTitles]);
+  }, [rawText, data, parseResult, review, selectedRepo, reviewPromptTemplate, floatingPanel, repoTitles]);
 
   useEffect(() => {
     if (selectedRepo >= parsed.repos.length) setSelectedRepo(0);
@@ -1199,10 +1293,24 @@ function App() {
                 </div>
               </div>
               <div className="button-row">
-                <button className="ghost-button" type="button" onClick={() => copyAndToast(reviewPromptText, '已复制 rubrics 质检提示词')}>
-                  <Clipboard size={16} />
-                  rubrics质检提示词
-                </button>
+                <div className="split-capsule">
+                  <button
+                    className="split-capsule-main"
+                    type="button"
+                    onClick={() => copyAndToast(reviewPromptText, '已复制 rubrics 质检提示词')}
+                  >
+                    <Clipboard size={16} />
+                    rubrics质检提示词
+                  </button>
+                  <button
+                    className="split-capsule-icon"
+                    type="button"
+                    title="设置rubrics质检提示词"
+                    onClick={() => setIsTemplateModalOpen(true)}
+                  >
+                    <Settings size={16} />
+                  </button>
+                </div>
                 <button className="primary-button" type="button" onClick={() => parseAndApply()}>
                   <ListChecks size={16} />
                   解析
@@ -1495,6 +1603,16 @@ function App() {
         onToggleMinimize={toggleFloatingPanel}
         onPromptModeChange={setPromptMode}
       />
+
+      {isTemplateModalOpen && (
+        <PromptTemplateModal
+          template={reviewPromptTemplate}
+          previewText={reviewPromptText}
+          onChange={setReviewPromptTemplate}
+          onClose={() => setIsTemplateModalOpen(false)}
+          onReset={() => setReviewPromptTemplate(DEFAULT_RUBRICS_REVIEW_TEMPLATE)}
+        />
+      )}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

@@ -1496,6 +1496,14 @@ function LabelApp() {
                           </div>
                         </div>
 
+                        <AutoGrowTextarea
+                          className="rubric-edit"
+                          value={rubric.text}
+                          onChange={(event) => updateRubricText(rubricIndex, event.target.value)}
+                          placeholder="填写 rubric 内容"
+                          minHeight={44}
+                        />
+
                         {rubricQcIssue && (
                           <div className={`annotation-note qc-note ${resolvedQc[rubricQcKey] ? 'resolved' : ''}`}>
                             <div className="qc-note-head">
@@ -1510,31 +1518,6 @@ function LabelApp() {
                               </label>
                             </div>
                             <p>{rubricQcIssue.rawMessage || rubricQcIssue.message || '需要修改该条 rubric'}</p>
-                          </div>
-                        )}
-
-                        <AutoGrowTextarea
-                          className="rubric-edit"
-                          value={rubric.text}
-                          onChange={(event) => updateRubricText(rubricIndex, event.target.value)}
-                          placeholder="填写 rubric 内容"
-                          minHeight={44}
-                        />
-
-                        {scoreQcIssue && (
-                          <div className={`annotation-note qc-note ${resolvedQc[qcKey] ? 'resolved' : ''}`}>
-                            <div className="qc-note-head">
-                              <strong>分数质检评论</strong>
-                              <label>
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(resolvedQc[qcKey])}
-                                  onChange={(event) => toggleResolvedQc(qcKey, null, event.target.checked)}
-                                />
-                                已修改
-                              </label>
-                            </div>
-                            <p>{scoreQcIssue.rawMessage || scoreQcIssue.message || '需要修改该条分数'}</p>
                           </div>
                         )}
 
@@ -1557,6 +1540,23 @@ function LabelApp() {
                             hasMissingNote={hasMissingNote}
                             flashToken={missingNoteFlashToken}
                           />
+                        )}
+
+                        {scoreQcIssue && (
+                          <div className={`annotation-note qc-note ${resolvedQc[qcKey] ? 'resolved' : ''}`}>
+                            <div className="qc-note-head">
+                              <strong>分数质检评论</strong>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(resolvedQc[qcKey])}
+                                  onChange={(event) => toggleResolvedQc(qcKey, null, event.target.checked)}
+                                />
+                                已修改
+                              </label>
+                            </div>
+                            <p>{scoreQcIssue.rawMessage || scoreQcIssue.message || '需要修改该条分数'}</p>
+                          </div>
                         )}
                       </article>
                     );

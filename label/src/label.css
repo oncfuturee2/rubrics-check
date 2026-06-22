@@ -45,6 +45,14 @@
   margin-top: 8px;
 }
 
+.segmented + .qc-note {
+  margin-top: 8px;
+}
+
+.issue-textarea-wrap + .qc-note {
+  margin-top: 8px;
+}
+
 .label-app .rubric-head {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
