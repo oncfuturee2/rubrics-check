@@ -15,17 +15,11 @@ mod embedded_workbench {
     include!(concat!(env!("OUT_DIR"), "/embedded_workbench.rs"));
 }
 
-#[derive(Clone, Copy)]
-enum WorkbenchMode {
-    QualityCheck,
-    Label,
-}
-
 #[derive(Clone, Serialize)]
 struct LauncherInfo {
-    mode: String,
     title: String,
-    url: String,
+    label_url: String,
+    qc_url: String,
 }
 
 #[derive(Clone)]
@@ -40,9 +34,7 @@ fn launcher_info(state: tauri::State<'_, LauncherState>) -> LauncherInfo {
 
 #[tauri::command]
 fn open_in_chrome(url: String) -> Result<(), String> {
-    let candidates = chrome_candidates();
-
-    for candidate in candidates {
+    for candidate in chrome_candidates() {
         if candidate.exists() && Command::new(&candidate).arg(&url).spawn().is_ok() {
             return Ok(());
         }
@@ -93,7 +85,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let mode = detect_mode();
             let listener = TcpListener::bind(("127.0.0.1", 0))
                 .map_err(|error| format!("无法启动本地服务器：{error}"))?;
             let port = listener
@@ -102,27 +93,16 @@ pub fn run() {
                 .port();
             thread::spawn(move || run_server(listener));
 
-            let url = match mode {
-                WorkbenchMode::QualityCheck => format!("http://127.0.0.1:{port}/"),
-                WorkbenchMode::Label => format!("http://127.0.0.1:{port}/label/"),
-            };
-            let title = match mode {
-                WorkbenchMode::QualityCheck => "Rubrics 质检工作台",
-                WorkbenchMode::Label => "Rubrics 标注工作台",
-            }
-            .to_string();
+            let title = "Rubrics 工作台启动器".to_string();
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title(&title);
             }
+
             app.manage(LauncherState {
                 info: LauncherInfo {
-                    mode: match mode {
-                        WorkbenchMode::QualityCheck => "qc",
-                        WorkbenchMode::Label => "label",
-                    }
-                    .to_string(),
                     title,
-                    url,
+                    label_url: format!("http://127.0.0.1:{port}/label/"),
+                    qc_url: format!("http://127.0.0.1:{port}/"),
                 },
             });
             Ok(())
@@ -130,20 +110,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![launcher_info, open_in_chrome, copy_to_clipboard])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-fn detect_mode() -> WorkbenchMode {
-    let exe_name = env::current_exe()
-        .ok()
-        .and_then(|path| path.file_stem().map(OsStr::to_os_string))
-        .map(|name| name.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-
-    if exe_name.contains("label") || exe_name.contains("标注") {
-        WorkbenchMode::Label
-    } else {
-        WorkbenchMode::QualityCheck
-    }
 }
 
 fn run_server(listener: TcpListener) {

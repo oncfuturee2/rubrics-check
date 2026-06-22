@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Rubrics 工作台启动器",
-        "width": 620,
-        "height": 420,
+        "width": 700,
+        "height": 460,
         "resizable": false
       }
     ],
