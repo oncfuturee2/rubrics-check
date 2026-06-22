@@ -26,20 +26,39 @@
 }
 
 .rubric-edit {
+  grid-column: 1 / -1;
+  width: 100%;
   min-height: 44px;
   margin: 0;
+  overflow: hidden;
   padding: 7px 9px;
+  resize: none;
   font-size: 13px;
   font-family: inherit;
 }
 
-.label-app .rubric-head > div:first-child {
-  flex: 1;
-  min-width: 0;
+.rubric-edit + .qc-note {
+  margin-top: 8px;
+}
+
+.qc-note + .rubric-edit {
+  margin-top: 8px;
+}
+
+.label-app .rubric-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.label-app .rubric-head strong {
+  margin-bottom: 0;
+  line-height: 28px;
 }
 
 .rubric-actions {
   display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   gap: 4px;
 }

@@ -353,8 +353,10 @@ button:active {
 }
 
 .repo-item.active {
+  border-width: 2px;
   border-color: rgba(15, 118, 110, 0.7);
   background: var(--surface-green);
+  padding: 2px 4px;
 }
 
 .repo-index {
@@ -588,8 +590,8 @@ button:active {
 }
 
 .rubric-item.fail {
-  border-color: rgba(220, 38, 38, 0.36);
-  background: #fffafa;
+  border-color: var(--border);
+  background: #fff;
 }
 
 .rubric-item.mismatch {
@@ -597,21 +599,32 @@ button:active {
 }
 
 .rubric-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
 }
 
+.rubric-head-main {
+  display: contents;
+}
+
 .rubric-head strong {
   display: block;
+  grid-column: 1;
   margin-bottom: 4px;
   color: #0f172a;
   font-size: 14px;
 }
 
-.rubric-head p {
+.rubric-head .rubric-text {
+  grid-column: 1 / -1;
   margin: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 7px 9px;
   color: #334155;
   font-size: 13px;
 }
@@ -619,6 +632,8 @@ button:active {
 .rubric-note-toggle {
   display: inline-flex;
   align-items: center;
+  grid-column: 1 / -1;
+  justify-self: start;
   min-height: 28px;
   margin-top: 8px;
   border: 1px solid #bfdbfe;
@@ -642,6 +657,8 @@ button:active {
 
 .score-tags {
   display: flex;
+  grid-column: 2;
+  grid-row: 1;
   flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;

@@ -1353,13 +1353,13 @@ function App() {
 
                     return (
                       <article
-                        className={`rubric-item ${check.expected === 0 ? 'fail' : ''} ${hasMismatch ? 'mismatch' : ''}`}
+                        className={`rubric-item ${hasMismatch ? 'mismatch' : ''}`}
                         key={`${selectedRepo}-${rubric.number}-${rubric.text}`}
                       >
                         <div className="rubric-head">
-                          <div>
-                            <strong>第 {rubric.number || rubricIndex + 1} 条</strong>
-                            <p>{rubric.text}</p>
+                          <div className="rubric-head-main">
+                            <strong>第 {rubric.number || rubricIndex + 1} 条Rubrics</strong>
+                            <p className="rubric-text">{rubric.text}</p>
                             <button
                               type="button"
                               className={`rubric-note-toggle ${showRubricIssue ? 'active' : ''}`}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { gsap } from 'gsap';
 import {
   AlertTriangle,
@@ -521,6 +521,27 @@ async function copyText(text) {
 
 function StatusBadge({ type = 'neutral', children }) {
   return <span className={`status-badge ${type}`}>{children}</span>;
+}
+
+function AutoGrowTextarea({ className = '', value, onChange, minHeight = 44, ...props }) {
+  const textareaRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const element = textareaRef.current;
+    if (!element) return;
+    element.style.height = 'auto';
+    element.style.height = `${Math.max(minHeight, element.scrollHeight)}px`;
+  }, [value, minHeight]);
+
+  return (
+    <textarea
+      {...props}
+      ref={textareaRef}
+      className={className}
+      value={value}
+      onChange={onChange}
+    />
+  );
 }
 
 function AnimatedNoteTextarea({ value, onChange, placeholder, hasMissingNote = false, flashToken = 0 }) {
@@ -1434,28 +1455,22 @@ function LabelApp() {
                     const note = notes[selectedRepo]?.[rubricIndex] || '';
                     const qcKey = `${selectedRepo}:${rubricIndex}`;
                     const rubricQcKey = `rubric:${rubricIndex}`;
+                    const rubricQcIssue = qcIssueMap.get(rubricQcKey);
+                    const scoreQcIssue = qcIssueMap.get(qcKey);
                     const qcIssues = [
-                      { key: rubricQcKey, title: 'Rubrics质检评论', issue: qcIssueMap.get(rubricQcKey) },
-                      { key: qcKey, title: '页面质检评论', issue: qcIssueMap.get(qcKey) },
+                      { key: rubricQcKey, title: 'Rubrics质检评论', issue: rubricQcIssue },
+                      { key: qcKey, title: '分数质检评论', issue: scoreQcIssue },
                     ].filter((item) => item.issue);
                     const hasMissingNote = Boolean(missingNoteKeys[qcKey]) && score === 0 && !String(note).trim();
 
                     return (
                       <article
-                        className={`rubric-item ${score === 0 ? 'fail' : ''} ${qcIssues.length ? 'mismatch' : ''}`}
+                        className={`rubric-item ${qcIssues.length ? 'mismatch' : ''}`}
                         data-rubric-index={rubricIndex}
                         key={`${rubric.id}-${selectedRepo}`}
                       >
                         <div className="rubric-head">
-                          <div>
-                            <strong>第 {rubricIndex + 1} 条</strong>
-                            <textarea
-                              className="rubric-edit"
-                              value={rubric.text}
-                              onChange={(event) => updateRubricText(rubricIndex, event.target.value)}
-                              placeholder="填写 rubric 内容"
-                            />
-                          </div>
+                          <strong>第 {rubricIndex + 1} 条Rubrics</strong>
                           <div className="rubric-actions">
                             <button
                               className="icon-button"
@@ -1481,22 +1496,47 @@ function LabelApp() {
                           </div>
                         </div>
 
-                        {qcIssues.map(({ key, title, issue }) => (
-                          <div className={`annotation-note qc-note ${resolvedQc[key] ? 'resolved' : ''}`} key={key}>
+                        {rubricQcIssue && (
+                          <div className={`annotation-note qc-note ${resolvedQc[rubricQcKey] ? 'resolved' : ''}`}>
                             <div className="qc-note-head">
-                              <strong>{title}</strong>
+                              <strong>Rubrics质检评论</strong>
                               <label>
                                 <input
                                   type="checkbox"
-                                  checked={Boolean(resolvedQc[key])}
-                                  onChange={(event) => toggleResolvedQc(key, null, event.target.checked)}
+                                  checked={Boolean(resolvedQc[rubricQcKey])}
+                                  onChange={(event) => toggleResolvedQc(rubricQcKey, null, event.target.checked)}
                                 />
                                 已修改
                               </label>
                             </div>
-                            <p>{issue.rawMessage || issue.message || '需要修改该条 rubric'}</p>
+                            <p>{rubricQcIssue.rawMessage || rubricQcIssue.message || '需要修改该条 rubric'}</p>
                           </div>
-                        ))}
+                        )}
+
+                        <AutoGrowTextarea
+                          className="rubric-edit"
+                          value={rubric.text}
+                          onChange={(event) => updateRubricText(rubricIndex, event.target.value)}
+                          placeholder="填写 rubric 内容"
+                          minHeight={44}
+                        />
+
+                        {scoreQcIssue && (
+                          <div className={`annotation-note qc-note ${resolvedQc[qcKey] ? 'resolved' : ''}`}>
+                            <div className="qc-note-head">
+                              <strong>分数质检评论</strong>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(resolvedQc[qcKey])}
+                                  onChange={(event) => toggleResolvedQc(qcKey, null, event.target.checked)}
+                                />
+                                已修改
+                              </label>
+                            </div>
+                            <p>{scoreQcIssue.rawMessage || scoreQcIssue.message || '需要修改该条分数'}</p>
+                          </div>
+                        )}
 
                         <div className="segmented">
                           <button className={score === 1 ? 'active pass' : ''} type="button" onClick={() => updateScore(selectedRepo, rubricIndex, 1)}>
