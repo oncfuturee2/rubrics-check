@@ -20,6 +20,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, parseRemarkIssues } from '../../src/rawRemarkParser.js';
 
 const STORAGE_KEY = 'rubrics-label-workbench.v1';
 const PROMPT_PANEL_STATE_VERSION = 1;
@@ -115,6 +116,16 @@ function pickDataRow(rows) {
   return nonEmpty[0] || [];
 }
 
+function hasRubricNumberSpacingIssue(rubricsText) {
+  return /^\s*\d+\s*[.、)](?=\S)/m.test(String(rubricsText || ''));
+}
+
+function getRubricNumberSpacingIssueNumbers(rubricsText) {
+  return [...String(rubricsText || '').matchAll(/^\s*(\d+)\s*[.、)](?=\S)/gm)]
+    .map((match) => Number(match[1]))
+    .filter((number) => Number.isInteger(number) && number > 0);
+}
+
 function parseRawInput(rawText) {
   const clean = stripCodeFence(rawText);
   let row = pickDataRow(parseDelimitedRows(clean, '\t'));
@@ -133,6 +144,7 @@ function parseRawInput(rawText) {
       ok: true,
       type: 'six',
       delimiterName,
+      row,
       data: {
         prompt: row[0] || '',
         repo: row[1] || '',
@@ -150,6 +162,7 @@ function parseRawInput(rawText) {
       ok: true,
       type: 'two',
       delimiterName,
+      row,
       data: {
         prompt: row[0] || '',
         repo: row[1] || '',
@@ -166,6 +179,7 @@ function parseRawInput(rawText) {
     ok: false,
     type: 'empty',
     delimiterName,
+    row,
     data: EMPTY_DATA,
     errors: [`只解析到 ${row.length} 列，至少需要 prompt 和 repo 两列。`],
   };
@@ -195,7 +209,7 @@ function parseRubricItems(rubricsText) {
   const text = String(rubricsText || '').trim();
   if (!text) return [];
 
-  const numbered = [...text.matchAll(/^\s*(\d+)\s*[\.、\)]\s+(.+?)(?=\n\s*\d+\s*[\.、\)]\s+|$)/gms)]
+  const numbered = [...text.matchAll(/^\s*(\d+)\s*[\.、\)]\s*(.+?)(?=\n\s*\d+\s*[\.、\)]\s*|$)/gms)]
     .map((match) => ({ id: crypto.randomUUID(), number: Number(match[1]), text: match[2].trim() }))
     .filter((item) => item.text);
   if (numbered.length) return numbered;
@@ -224,40 +238,83 @@ function parseScoreMatrix(scoreText) {
   }
 }
 
-function expandNumberList(value) {
-  return String(value || '')
-    .replace(/和/g, '、')
-    .split(/[、,，\s]+/)
-    .map((item) => Number(item))
-    .filter((item) => Number.isInteger(item) && item > 0);
-}
+function validateScoreMatrix(scoreText) {
+  const original = stripCodeFence(scoreText);
+  if (!original) {
+    return { ok: false, matrix: null, errors: ['评分列为空，需要填写 0/1 二维数组。'] };
+  }
 
-function parseRemarkIssues(noteText) {
-  const issueMap = new Map();
-  const lines = String(noteText || '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  if (/[，；]/.test(original)) {
+    return { ok: false, matrix: null, errors: ['评分列包含中文逗号或中文分号，二维数组必须使用英文逗号。'] };
+  }
 
-  lines.forEach((line) => {
-    const pageMatch = line.match(/第\s*(\d+)\s*个页面/);
-    if (!pageMatch) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(original);
+  } catch (error) {
+    return { ok: false, matrix: null, errors: [`评分列不是合法 JSON 二维数组：${error.message}`] };
+  }
 
-    const pageIndex = Number(pageMatch[1]) - 1;
-    const issueMatches = [
-      ...line.matchAll(/第\s*([0-9、,，\s和]+)\s*个\s*rub(?:rics|tics)?\s*->\s*([^；;]+)/gi),
-    ];
+  if (!Array.isArray(parsed)) {
+    return { ok: false, matrix: parsed, errors: ['评分列顶层必须是数组，例如 [[1,0],[1,1]]。'] };
+  }
 
-    issueMatches.forEach((match) => {
-      const rubricNumbers = expandNumberList(match[1]);
-      const description = match[2].replace(/[。.]$/, '').trim();
-      rubricNumbers.forEach((rubricNumber) => {
-        issueMap.set(`${pageIndex}:${rubricNumber - 1}`, description);
-      });
+  const errors = [];
+  parsed.forEach((row, rowIndex) => {
+    if (!Array.isArray(row)) {
+      errors.push(`第 ${rowIndex + 1} 行评分不是数组。`);
+      return;
+    }
+    row.forEach((value, colIndex) => {
+      if (!(value === 0 || value === 1)) {
+        errors.push(`第 ${rowIndex + 1} 行第 ${colIndex + 1} 列评分不是 0 或 1。`);
+      }
     });
   });
 
-  return issueMap;
+  return { ok: errors.length === 0, matrix: parsed, errors };
+}
+
+function validateParsedInput(result) {
+  if (!result) return { ok: false, errors: [], warnings: [] };
+  if (!result.ok) return { ok: false, errors: result.errors || [], warnings: [] };
+
+  const data = result.data || EMPTY_DATA;
+  const errors = [];
+  const warnings = [];
+  const repos = parseRepoList(data.repo);
+
+  if (!String(data.prompt || '').trim()) errors.push('prompt 列为空。');
+  if (!repos.length) errors.push('repo 列未解析到链接。');
+
+  if (result.type === 'two') {
+    return { ok: errors.length === 0, errors, warnings };
+  }
+
+  const rubrics = parseRubricItems(data.rubrics || '');
+  const score = validateScoreMatrix(data.score || '');
+  const matrix = Array.isArray(score.matrix) ? score.matrix : null;
+
+  if (!rubrics.length) errors.push('rubrics 列未解析到编号条目。');
+  errors.push(...score.errors);
+
+  if (matrix) {
+    const rowLengths = matrix.map((row) => (Array.isArray(row) ? row.length : '非数组'));
+    const uniqueLengths = [...new Set(rowLengths.map(String))];
+    if (uniqueLengths.length > 1) errors.push(`评分矩阵各行长度不一致：${rowLengths.join('、')}。`);
+    if (repos.length && matrix.length !== repos.length) {
+      errors.push(`评分矩阵行数应等于 repo 数量 ${repos.length}，当前为 ${matrix.length}。`);
+    }
+    if (rubrics.length) {
+      matrix.forEach((row, index) => {
+        if (Array.isArray(row) && row.length !== rubrics.length) {
+          errors.push(`第 ${index + 1} 行评分数量应等于 rubrics 条数 ${rubrics.length}，当前为 ${row.length}。`);
+        }
+      });
+    }
+  }
+
+  return { ok: errors.length === 0, errors, warnings };
 }
 
 function parseQcIssueMessage(rawMessage) {
@@ -460,6 +517,13 @@ function escapeTsvCell(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+function buildRawTextWithRubricsCell(parseResult, rubricsText) {
+  const row = [...(parseResult?.row || [])];
+  if (row.length < 6) return null;
+  const nextRow = [row[0] || '', row[1] || '', row[2] || '', rubricsText, row[4] || '', row.slice(5).join('\n') || ''];
+  return nextRow.map(escapeTsvCell).join('\t');
+}
+
 function buildTableRowOutput(rubricsText, scoreText, noteText) {
   return [rubricsText, scoreText, noteText].map(escapeTsvCell).join('\t');
 }
@@ -606,6 +670,56 @@ function AnimatedNoteTextarea({ value, onChange, placeholder, hasMissingNote = f
         onChange={onChange}
         placeholder={placeholder}
       />
+    </div>
+  );
+}
+
+function RubricsFormatModal({ value, onChange, onConfirm, onClose }) {
+  const issueNumbers = getRubricNumberSpacingIssueNumbers(value);
+  const issueText = issueNumbers.length
+    ? `列表序号后面需要保留一个空格，第${issueNumbers.join('、')}个rubrics序号后没有空格。`
+    : '列表序号后面需要保留一个空格。';
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="rubrics-format-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="rubrics格式修复"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="template-modal-head">
+          <div>
+            <h2>rubrics格式不正确</h2>
+            <p>{issueText}</p>
+          </div>
+          <button className="icon-button" type="button" title="关闭" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="rubrics-format-body">
+          <label className="stacked-label">
+            原始 rubrics
+            <textarea
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              spellCheck="false"
+              placeholder="请修正 rubrics 列表序号后的空格"
+            />
+          </label>
+        </div>
+
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>
+            取消
+          </button>
+          <button className="primary-button" type="button" onClick={onConfirm}>
+            确定并应用到原始输入框
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -769,10 +883,14 @@ function LabelApp() {
   const [scrollTarget, setScrollTarget] = useState(null);
   const [promptPanel, setPromptPanel] = useState(INITIAL_PROMPT_PANEL);
   const [promptPanelInteraction, setPromptPanelInteraction] = useState(null);
+  const [rubricsFormatModal, setRubricsFormatModal] = useState(null);
   const rubricListRef = useRef(null);
   const noteOutputRef = useRef(null);
+  const rawParseTimerRef = useRef(null);
 
   const repos = useMemo(() => parseRepoList(data.repo), [data.repo]);
+  const inputValidation = useMemo(() => validateParsedInput(parseResult), [parseResult]);
+  const isRawInputValid = inputValidation.ok;
   const repoKey = useMemo(() => repos.join('\n'), [repos]);
   const currentRepoUrl = repos[selectedRepo] || '';
   const qcIssueMap = useMemo(() => parseQcComment(qcComment), [qcComment]);
@@ -855,6 +973,13 @@ function LabelApp() {
     const timer = window.setTimeout(() => setToast(''), 2200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(
+    () => () => {
+      if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     setMissingNoteKeys((previous) => {
@@ -1039,23 +1164,42 @@ function LabelApp() {
     setSelectedRepo(0);
     setFrameKey((value) => value + 1);
     setRepoTitles({});
-    setPromptPanel(INITIAL_PROMPT_PANEL);
   }
 
-  function parseAndApply(text = rawText) {
+  function parseAndApply(text = rawText, { showToast = true } = {}) {
+    if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
+    rawParseTimerRef.current = null;
     const result = parseRawInput(text);
+    const validation = validateParsedInput(result);
     setParseResult(result);
-    if (result.ok) {
+    if (result.ok && validation.ok) {
       applyParsedData(result);
-      setToast(result.type === 'six' ? '已解析 6 列标注数据' : '已解析 prompt / repo 两列');
+      if (hasRubricNumberSpacingIssue(result.data.rubrics)) {
+        setRubricsFormatModal({ draft: result.data.rubrics });
+      } else {
+        setRubricsFormatModal(null);
+      }
+      if (showToast) setToast(result.type === 'six' ? '已解析 6 列标注数据' : '已解析 prompt / repo 两列');
     } else {
-      setToast(result.errors.join(' '));
+      setRubricsFormatModal(null);
+      if (showToast) setToast([...validation.errors, ...validation.warnings].join(' ') || result.errors.join(' '));
     }
+  }
+
+  function handleRawTextChange(value) {
+    setRawText(value);
+    if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
+    rawParseTimerRef.current = window.setTimeout(() => {
+      parseAndApply(value, { showToast: false });
+      rawParseTimerRef.current = null;
+    }, 350);
   }
 
   async function pasteAndParse() {
     try {
       const text = await navigator.clipboard.readText();
+      if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
+      rawParseTimerRef.current = null;
       setRawText(text);
       parseAndApply(text);
     } catch (error) {
@@ -1151,6 +1295,8 @@ function LabelApp() {
   }
 
   function clearAll() {
+    if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
+    rawParseTimerRef.current = null;
     setRawText('');
     setData(EMPTY_DATA);
     setParseResult(null);
@@ -1163,7 +1309,21 @@ function LabelApp() {
     setSelectedRepo(0);
     setRepoTitles({});
     setPromptPanelInteraction(null);
+    setRubricsFormatModal(null);
     setToast('已清空');
+  }
+
+  function applyRubricsFormatFix() {
+    const nextRawText = buildRawTextWithRubricsCell(parseResult, rubricsFormatModal?.draft || '');
+    if (!nextRawText) {
+      setRubricsFormatModal(null);
+      setToast('无法回写 rubrics，请检查原始输入列数。');
+      return;
+    }
+
+    setRubricsFormatModal(null);
+    setRawText(nextRawText);
+    parseAndApply(nextRawText);
   }
 
   function startPromptPanelDrag(event) {
@@ -1262,7 +1422,7 @@ function LabelApp() {
   }
 
   return (
-    <div className="app-shell label-app">
+    <div className={`app-shell label-app ${isRawInputValid ? '' : 'input-invalid'}`}>
       <main className="workbench-grid">
         <section className="left-workspace">
           <section className="input-panel">
@@ -1273,12 +1433,22 @@ function LabelApp() {
                   <p>支持 prompt/repo 两列，也支持原 6 列标注数据继续修改</p>
                   <div className="parse-line inline">
                     {parseResult ? (
-                      <StatusBadge type={parseResult.ok ? 'success' : 'warning'}>
+                      <StatusBadge type={inputValidation.ok ? 'success' : 'warning'}>
                         {parseResult.ok ? `已解析：${parseResult.type === 'six' ? '6 列' : '2 列'}` : parseResult.errors.join(' ')}
                       </StatusBadge>
                     ) : (
                       <StatusBadge>等待解析</StatusBadge>
                     )}
+                    {inputValidation.errors.map((error) => (
+                      <StatusBadge type="danger" key={error}>
+                        {error}
+                      </StatusBadge>
+                    ))}
+                    {inputValidation.warnings.map((warning) => (
+                      <StatusBadge type="warning" key={warning}>
+                        {warning}
+                      </StatusBadge>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -1301,7 +1471,7 @@ function LabelApp() {
             <textarea
               className="raw-input"
               value={rawText}
-              onChange={(event) => setRawText(event.target.value)}
+              onChange={(event) => handleRawTextChange(event.target.value)}
               placeholder="粘贴 prompt / repo 两列，或粘贴 prompt、repo、任务类型、rubrics、评分、备注 6 列"
               spellCheck="false"
             />
@@ -1461,7 +1631,7 @@ function LabelApp() {
                       { key: rubricQcKey, title: 'Rubrics质检评论', issue: rubricQcIssue },
                       { key: qcKey, title: '分数质检评论', issue: scoreQcIssue },
                     ].filter((item) => item.issue);
-                    const hasMissingNote = Boolean(missingNoteKeys[qcKey]) && score === 0 && !String(note).trim();
+                    const hasMissingNote = score === 0 && !String(note).trim();
 
                     return (
                       <article
@@ -1536,7 +1706,7 @@ function LabelApp() {
                           <AnimatedNoteTextarea
                             value={note}
                             onChange={(event) => updateNote(selectedRepo, rubricIndex, event.target.value)}
-                            placeholder="填写 0 分备注，此内容会进入备注输出"
+                            placeholder={note ? '填写 0 分备注，此内容会进入备注输出' : EMPTY_PARSED_ZERO_NOTE_MESSAGE}
                             hasMissingNote={hasMissingNote}
                             flashToken={missingNoteFlashToken}
                           />
@@ -1619,6 +1789,15 @@ function LabelApp() {
         onToggleMinimize={togglePromptPanel}
         onPromptModeChange={setPromptPanelMode}
       />
+
+      {rubricsFormatModal && (
+        <RubricsFormatModal
+          value={rubricsFormatModal.draft}
+          onChange={(draft) => setRubricsFormatModal((previous) => ({ ...(previous || {}), draft }))}
+          onClose={() => setRubricsFormatModal(null)}
+          onConfirm={applyRubricsFormatFix}
+        />
+      )}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

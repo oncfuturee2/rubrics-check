@@ -20,9 +20,10 @@ import {
   X,
 } from 'lucide-react';
 import defaultRubricsReviewTemplate from '../prompt.md?raw';
+import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, extractPageRemarkText, parseRemarkIssues } from './rawRemarkParser.js';
 
 const STORAGE_KEY = 'rubrics-qc-workbench.v1';
-const FLOATING_PANEL_STATE_VERSION = 2;
+const FLOATING_PANEL_STATE_VERSION = 3;
 const REPO_TITLE_STATE_VERSION = 2;
 const INITIAL_FLOATING_PANEL = {
   x: 12,
@@ -32,6 +33,7 @@ const INITIAL_FLOATING_PANEL = {
   split: 0.58,
   minimized: false,
   promptMode: 'markdown',
+  noteMode: 'current',
 };
 
 const EMPTY_DATA = {
@@ -163,6 +165,29 @@ function pickDataRow(rows) {
   return nonEmpty[0] || [];
 }
 
+function hasRubricNumberSpacingIssue(rubricsText) {
+  return /^\s*\d+\s*[.、)](?=\S)/m.test(String(rubricsText || ''));
+}
+
+function getRubricNumberSpacingIssueNumbers(rubricsText) {
+  return [...String(rubricsText || '').matchAll(/^\s*(\d+)\s*[.、)](?=\S)/gm)]
+    .map((match) => Number(match[1]))
+    .filter((number) => Number.isInteger(number) && number > 0);
+}
+
+function escapeTsvCell(value) {
+  const text = String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!/[\t\n"]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function buildRawTextWithRubricsCell(parseResult, rubricsText) {
+  const row = [...(parseResult?.row || [])];
+  if (row.length < 6) return null;
+  const nextRow = [row[0] || '', row[1] || '', row[2] || '', rubricsText, row[4] || '', row.slice(5).join('\n') || ''];
+  return nextRow.map(escapeTsvCell).join('\t');
+}
+
 function parseRawRow(rawText) {
   const clean = stripCodeFence(rawText);
   const tabRow = pickDataRow(parseDelimitedRows(clean, '\t'));
@@ -230,7 +255,7 @@ function parseRubricItems(rubricsText) {
   const text = String(rubricsText || '').trim();
   if (!text) return [];
 
-  const numbered = [...text.matchAll(/^\s*(\d+)\s*[\.、\)]\s+(.+?)(?=\n\s*\d+\s*[\.、\)]\s+|$)/gms)]
+  const numbered = [...text.matchAll(/^\s*(\d+)\s*[\.、\)]\s*(.+?)(?=\n\s*\d+\s*[\.、\)]\s*|$)/gms)]
     .map((match) => ({ number: Number(match[1]), text: match[2].trim() }))
     .filter((item) => item.text);
   if (numbered.length) return numbered;
@@ -314,42 +339,6 @@ function validateData(data) {
   }
 
   return { repos, rubrics, score, matrix, errors, warnings };
-}
-
-function expandNumberList(value) {
-  return String(value || '')
-    .replace(/和/g, '、')
-    .split(/[、,，\s]+/)
-    .map((item) => Number(item))
-    .filter((item) => Number.isInteger(item) && item > 0);
-}
-
-function parseRemarkIssues(noteText) {
-  const issueMap = new Map();
-  const lines = String(noteText || '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  lines.forEach((line) => {
-    const pageMatch = line.match(/第\s*(\d+)\s*个页面/);
-    if (!pageMatch) return;
-
-    const pageIndex = Number(pageMatch[1]) - 1;
-    const issueMatches = [
-      ...line.matchAll(/第\s*([0-9、,，\s和]+)\s*个\s*rub(?:rics|tics)?\s*->\s*([^；;]+)/gi),
-    ];
-
-    issueMatches.forEach((match) => {
-      const rubricNumbers = expandNumberList(match[1]);
-      const description = match[2].replace(/[。.]$/, '').trim();
-      rubricNumbers.forEach((rubricNumber) => {
-        issueMap.set(`${pageIndex}:${rubricNumber - 1}`, description);
-      });
-    });
-  });
-
-  return issueMap;
 }
 
 function getOriginalScore(matrix, repoIndex, rubricIndex) {
@@ -718,14 +707,18 @@ function CombinedFloatingPanel({
   panel,
   prompt,
   note,
+  currentRepoNote,
   onDragStart,
   onSplitStart,
   onResizeStart,
   onToggleMinimize,
   onPromptModeChange,
+  onNoteModeChange,
 }) {
   const leftWidth = Math.round(panel.width * panel.split);
   const rightWidth = Math.max(120, panel.width - leftWidth - 9);
+  const noteText = panel.noteMode === 'all' ? note : currentRepoNote;
+  const emptyNoteText = panel.noteMode === 'all' ? '未解析备注' : '当前repo未解析到备注';
 
   return (
     <aside
@@ -790,8 +783,26 @@ function CombinedFloatingPanel({
               onPointerDown={onSplitStart}
             />
             <section className="combined-pane note-pane" style={{ width: rightWidth }}>
-              <div className="pane-title">备注</div>
-              <pre>{note || '未解析备注'}</pre>
+              <div className="pane-title pane-title-with-actions">
+                <span>备注</span>
+                <div className="mini-segmented">
+                  <button
+                    type="button"
+                    className={panel.noteMode === 'all' ? 'active' : ''}
+                    onClick={() => onNoteModeChange('all')}
+                  >
+                    全部备注
+                  </button>
+                  <button
+                    type="button"
+                    className={panel.noteMode !== 'all' ? 'active' : ''}
+                    onClick={() => onNoteModeChange('current')}
+                  >
+                    当前repo备注
+                  </button>
+                </div>
+              </div>
+              <pre>{noteText || emptyNoteText}</pre>
             </section>
           </div>
           <div className="panel-resize-handle" title="调整窗口大小" onPointerDown={onResizeStart} />
@@ -891,6 +902,56 @@ function PromptTemplateModal({ template, previewText, onChange, onClose, onReset
   );
 }
 
+function RubricsFormatModal({ value, onChange, onConfirm, onClose }) {
+  const issueNumbers = getRubricNumberSpacingIssueNumbers(value);
+  const issueText = issueNumbers.length
+    ? `列表序号后面需要保留一个空格，第${issueNumbers.join('、')}个rubrics序号后没有空格。`
+    : '列表序号后面需要保留一个空格。';
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="rubrics-format-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="rubrics格式修复"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="template-modal-head">
+          <div>
+            <h2>rubrics格式不正确</h2>
+            <p>{issueText}</p>
+          </div>
+          <button className="icon-button" type="button" title="关闭" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="rubrics-format-body">
+          <label className="stacked-label">
+            原始 rubrics
+            <textarea
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              spellCheck="false"
+              placeholder="请修正 rubrics 列表序号后的空格"
+            />
+          </label>
+        </div>
+
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>
+            取消
+          </button>
+          <button className="primary-button" type="button" onClick={onConfirm}>
+            确定并应用到原始输入框
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [rawText, setRawText] = useState('');
   const [data, setData] = useState(EMPTY_DATA);
@@ -905,11 +966,15 @@ function App() {
   const [repoTitles, setRepoTitles] = useState({});
   const [reviewPromptTemplate, setReviewPromptTemplate] = useState(DEFAULT_RUBRICS_REVIEW_TEMPLATE);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [rubricsFormatModal, setRubricsFormatModal] = useState(null);
   const rubricListRef = useRef(null);
+  const rawParseTimerRef = useRef(null);
 
   const parsed = useMemo(() => validateData(data), [data]);
+  const isRawInputValid = Boolean(parseResult?.ok) && parsed.errors.length === 0 && parsed.warnings.length === 0;
   const repoKey = useMemo(() => parsed.repos.join('\n'), [parsed.repos]);
   const annotationNotes = useMemo(() => parseRemarkIssues(data.note), [data.note]);
+  const currentRepoNote = useMemo(() => extractPageRemarkText(data.note, selectedRepo), [data.note, selectedRepo]);
   const rubricQualityIssues = useMemo(() => parseRubricQualityIssues(review.promptRubricIssues), [review.promptRubricIssues]);
   const currentRepoUrl = parsed.repos[selectedRepo] || '';
   const currentPage = review.pages?.[selectedRepo];
@@ -943,8 +1008,10 @@ function App() {
             ? { ...INITIAL_FLOATING_PANEL, ...saved.floatingPanels.prompt }
             : INITIAL_FLOATING_PANEL);
       setFloatingPanel({
+        ...INITIAL_FLOATING_PANEL,
         ...loadedFloatingPanel,
-        promptMode: saved.floatingPanelVersion === FLOATING_PANEL_STATE_VERSION ? loadedFloatingPanel.promptMode || 'markdown' : 'markdown',
+        promptMode: loadedFloatingPanel.promptMode || 'markdown',
+        noteMode: loadedFloatingPanel.noteMode || 'current',
       });
       setRepoTitles(saved.repoTitleVersion === REPO_TITLE_STATE_VERSION ? saved.repoTitles || {} : {});
     } catch (error) {
@@ -971,6 +1038,13 @@ function App() {
   useEffect(() => {
     if (selectedRepo >= parsed.repos.length) setSelectedRepo(0);
   }, [parsed.repos.length, selectedRepo]);
+
+  useEffect(
+    () => () => {
+      if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -1088,7 +1162,9 @@ function App() {
     };
   }, [panelInteraction]);
 
-  function parseAndApply(text = rawText) {
+  function parseAndApply(text = rawText, { showToast = true } = {}) {
+    if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
+    rawParseTimerRef.current = null;
     const result = parseRawRow(text);
     const nextData = result.data || EMPTY_DATA;
     const nextParsed = validateData(nextData);
@@ -1098,12 +1174,28 @@ function App() {
     setFrameKey((key) => key + 1);
     setRepoTitles({});
     setReview(createReviewState(nextParsed.repos, nextParsed.rubrics, nextParsed.matrix, nextData.note));
-    setToast(result.ok ? `已按 ${result.delimiterName} 解析 6 列` : result.errors.join(' '));
+    if (result.ok && hasRubricNumberSpacingIssue(nextData.rubrics)) {
+      setRubricsFormatModal({ draft: nextData.rubrics });
+    } else {
+      setRubricsFormatModal(null);
+    }
+    if (showToast) setToast(result.ok ? `已按 ${result.delimiterName} 解析 6 列` : result.errors.join(' '));
+  }
+
+  function handleRawTextChange(value) {
+    setRawText(value);
+    if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
+    rawParseTimerRef.current = window.setTimeout(() => {
+      parseAndApply(value, { showToast: false });
+      rawParseTimerRef.current = null;
+    }, 350);
   }
 
   async function pasteAndParse() {
     try {
       const text = await navigator.clipboard.readText();
+      if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
+      rawParseTimerRef.current = null;
       setRawText(text);
       parseAndApply(text);
     } catch (error) {
@@ -1112,6 +1204,8 @@ function App() {
   }
 
   function clearAll() {
+    if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
+    rawParseTimerRef.current = null;
     setRawText('');
     setData(EMPTY_DATA);
     setParseResult(null);
@@ -1120,7 +1214,21 @@ function App() {
     setPanelInteraction(null);
     setIsFrameFullscreen(false);
     setRepoTitles({});
+    setRubricsFormatModal(null);
     setToast('已清空');
+  }
+
+  function applyRubricsFormatFix() {
+    const nextRawText = buildRawTextWithRubricsCell(parseResult, rubricsFormatModal?.draft || '');
+    if (!nextRawText) {
+      setRubricsFormatModal(null);
+      setToast('无法回写 rubrics，请检查原始输入列数。');
+      return;
+    }
+
+    setRubricsFormatModal(null);
+    setRawText(nextRawText);
+    parseAndApply(nextRawText);
   }
 
   function startFloatingDrag(event) {
@@ -1164,6 +1272,10 @@ function App() {
 
   function setPromptMode(promptMode) {
     setFloatingPanel((previous) => ({ ...previous, promptMode }));
+  }
+
+  function setNoteMode(noteMode) {
+    setFloatingPanel((previous) => ({ ...previous, noteMode }));
   }
 
   function updatePage(repoIndex, patch) {
@@ -1262,7 +1374,7 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${isRawInputValid ? '' : 'input-invalid'}`}>
       <main className="workbench-grid">
         <section className="left-workspace">
           <section className="input-panel">
@@ -1329,7 +1441,7 @@ function App() {
             <textarea
               className="raw-input"
               value={rawText}
-              onChange={(event) => setRawText(event.target.value)}
+              onChange={(event) => handleRawTextChange(event.target.value)}
               placeholder="在这里粘贴整行 6 列数据"
               spellCheck="false"
             />
@@ -1454,6 +1566,8 @@ function App() {
                       originalScore !== check.expected;
                     const annotationNote =
                       check.annotationNote || annotationNotes.get(`${selectedRepo}:${rubricIndex}`) || '';
+                    const displayedAnnotationNote =
+                      annotationNote || (originalScore === 0 ? EMPTY_PARSED_ZERO_NOTE_MESSAGE : '');
                     const rubricQualityIssue = rubricQualityIssues.get(rubricIndex) || '';
                     const showRubricIssue = Boolean(review.rubricIssueOpen?.[rubricIndex] || rubricQualityIssue);
                     const showQcReason = hasMismatch || check.noteOpen;
@@ -1495,13 +1609,6 @@ function App() {
                         />
                       )}
 
-                      {annotationNote && (
-                        <div className="annotation-note">
-                          <strong>标注备注</strong>
-                          <p>{annotationNote}</p>
-                        </div>
-                      )}
-
                       <div className="segmented">
                           <button
                             type="button"
@@ -1527,6 +1634,13 @@ function App() {
                           添加备注
                         </button>
                       </div>
+
+                      {displayedAnnotationNote && (
+                        <div className="annotation-note">
+                          <strong>标注备注</strong>
+                          <p>{displayedAnnotationNote}</p>
+                        </div>
+                      )}
 
                         {showQcReason && (
                           <>
@@ -1597,11 +1711,13 @@ function App() {
         panel={floatingPanel}
         prompt={data.prompt}
         note={data.note}
+        currentRepoNote={currentRepoNote}
         onDragStart={startFloatingDrag}
         onSplitStart={startSplitDrag}
         onResizeStart={startResizeDrag}
         onToggleMinimize={toggleFloatingPanel}
         onPromptModeChange={setPromptMode}
+        onNoteModeChange={setNoteMode}
       />
 
       {isTemplateModalOpen && (
@@ -1611,6 +1727,15 @@ function App() {
           onChange={setReviewPromptTemplate}
           onClose={() => setIsTemplateModalOpen(false)}
           onReset={() => setReviewPromptTemplate(DEFAULT_RUBRICS_REVIEW_TEMPLATE)}
+        />
+      )}
+
+      {rubricsFormatModal && (
+        <RubricsFormatModal
+          value={rubricsFormatModal.draft}
+          onChange={(draft) => setRubricsFormatModal((previous) => ({ ...(previous || {}), draft }))}
+          onClose={() => setRubricsFormatModal(null)}
+          onConfirm={applyRubricsFormatFix}
         />
       )}
 

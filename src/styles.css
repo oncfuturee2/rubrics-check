@@ -331,6 +331,36 @@ button:active {
   margin-top: 0;
 }
 
+.app-shell.input-invalid .viewer-panel,
+.app-shell.input-invalid .review-panel,
+.app-shell.input-invalid .floating-panel {
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.42;
+  filter: grayscale(0.88) saturate(0.34);
+}
+
+.app-shell.input-invalid .viewer-panel,
+.app-shell.input-invalid .review-panel {
+  position: relative;
+}
+
+.app-shell.input-invalid .viewer-panel::after,
+.app-shell.input-invalid .review-panel::after {
+  content: "原始输入未通过校验";
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.58);
+  color: #64748b;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
 .left-workspace {
   display: flex;
   min-width: 0;
@@ -970,6 +1000,23 @@ button:active {
   font-weight: 900;
 }
 
+.pane-title-with-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pane-title-with-actions .mini-segmented {
+  flex: 0 0 auto;
+}
+
+.pane-title-with-actions .mini-segmented button {
+  min-height: 24px;
+  padding: 3px 7px;
+  font-size: 12px;
+}
+
 .splitter {
   flex: 0 0 9px;
   border-left: 1px solid var(--border);
@@ -1194,6 +1241,47 @@ button:active {
   overflow: auto;
   padding: 12px;
   background: #fff;
+}
+
+.rubrics-format-modal {
+  display: flex;
+  width: min(760px, calc(100vw - 36px));
+  max-height: min(680px, calc(100vh - 36px));
+  min-height: 360px;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+}
+
+.rubrics-format-body {
+  min-height: 0;
+  flex: 1;
+  padding: 10px;
+}
+
+.rubrics-format-body .stacked-label {
+  height: 100%;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.rubrics-format-body textarea {
+  min-height: 260px;
+  height: 100%;
+  resize: none;
+  border-color: var(--border-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono CJK SC", monospace;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-soft);
+  padding: 10px;
 }
 
 .toast {

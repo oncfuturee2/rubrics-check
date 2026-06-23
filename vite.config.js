@@ -21,7 +21,23 @@ function extractPageTitle(htmlText) {
 function fetchHtml(url) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https:') ? https : http;
-    const request = client.get(
+    let settled = false;
+    let request;
+
+    function finishHtml(html) {
+      if (settled) return;
+      settled = true;
+      resolve(html);
+      request?.destroy();
+    }
+
+    function fail(error) {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    }
+
+    request = client.get(
       url,
       {
         headers: {
@@ -48,14 +64,15 @@ function fetchHtml(url) {
         let html = '';
         response.on('data', (chunk) => {
           html += chunk;
-          if (html.length > 256 * 1024) request.destroy();
+          if (/<\/title>/i.test(html)) finishHtml(html);
+          if (html.length > 512 * 1024) finishHtml(html);
         });
-        response.on('end', () => resolve(html));
+        response.on('end', () => finishHtml(html));
       },
     );
 
-    request.on('timeout', () => request.destroy(new Error('timeout')));
-    request.on('error', reject);
+    request.on('timeout', () => fail(new Error('timeout')));
+    request.on('error', fail);
   });
 }
 
