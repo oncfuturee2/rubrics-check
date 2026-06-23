@@ -873,14 +873,14 @@ function PromptTemplateModal({ template, previewText, onChange, onClose, onReset
         </div>
 
         <div className="template-modal-body">
-          <label className="stacked-label template-editor">
-            原始模板
+          <section className="template-editor">
+            <div className="template-editor-title">原始模板</div>
             <textarea
               value={template}
               onChange={(event) => onChange(event.target.value)}
               spellCheck="false"
             />
-          </label>
+          </section>
           <section className="template-preview">
             <div className="template-preview-title">Markdown预览</div>
             <div className="prompt-content markdown">{renderMarkdownBlocks(previewText || ' ')}</div>
@@ -1117,7 +1117,7 @@ function App() {
     setParseResult(null);
     setReview(createReviewState([], [], null, ''));
     setSelectedRepo(0);
-    setFloatingPanel(INITIAL_FLOATING_PANEL);
+    setPanelInteraction(null);
     setIsFrameFullscreen(false);
     setRepoTitles({});
     setToast('已清空');

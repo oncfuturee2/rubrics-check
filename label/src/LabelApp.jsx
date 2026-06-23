@@ -1162,7 +1162,7 @@ function LabelApp() {
     setResolvedQc({});
     setSelectedRepo(0);
     setRepoTitles({});
-    setPromptPanel(INITIAL_PROMPT_PANEL);
+    setPromptPanelInteraction(null);
     setToast('已清空');
   }
 
