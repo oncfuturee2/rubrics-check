@@ -34,21 +34,30 @@ fn launcher_info(state: tauri::State<'_, LauncherState>) -> LauncherInfo {
 
 #[tauri::command]
 fn open_in_chrome(url: String) -> Result<(), String> {
-    for candidate in chrome_candidates() {
+    open_browser(url, "chrome", chrome_candidates(), "Chrome")
+}
+
+#[tauri::command]
+fn open_in_edge(url: String) -> Result<(), String> {
+    open_browser(url, "msedge", edge_candidates(), "Edge")
+}
+
+fn open_browser(url: String, command_name: &str, candidates: Vec<PathBuf>, browser_label: &str) -> Result<(), String> {
+    for candidate in candidates {
         if candidate.exists() && Command::new(&candidate).arg(&url).spawn().is_ok() {
             return Ok(());
         }
     }
 
-    if Command::new("chrome").arg(&url).spawn().is_ok() {
+    if Command::new(command_name).arg(&url).spawn().is_ok() {
         return Ok(());
     }
 
     Command::new("cmd")
-        .args(["/C", "start", "", "chrome", &url])
+        .args(["/C", "start", "", command_name, &url])
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("无法打开 Chrome：{error}"))
+        .map_err(|error| format!("无法打开 {browser_label}：{error}"))
 }
 
 #[tauri::command]
@@ -107,7 +116,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![launcher_info, open_in_chrome, copy_to_clipboard])
+        .invoke_handler(tauri::generate_handler![launcher_info, open_in_chrome, open_in_edge, copy_to_clipboard])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -318,6 +327,20 @@ fn chrome_candidates() -> Vec<PathBuf> {
     }
     if let Ok(path) = env::var("LOCALAPPDATA") {
         candidates.push(PathBuf::from(path).join("Google").join("Chrome").join("Application").join("chrome.exe"));
+    }
+    candidates
+}
+
+fn edge_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(path) = env::var("PROGRAMFILES") {
+        candidates.push(PathBuf::from(path).join("Microsoft").join("Edge").join("Application").join("msedge.exe"));
+    }
+    if let Ok(path) = env::var("PROGRAMFILES(X86)") {
+        candidates.push(PathBuf::from(path).join("Microsoft").join("Edge").join("Application").join("msedge.exe"));
+    }
+    if let Ok(path) = env::var("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(path).join("Microsoft").join("Edge").join("Application").join("msedge.exe"));
     }
     candidates
 }

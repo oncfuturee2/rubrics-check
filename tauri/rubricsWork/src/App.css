@@ -133,7 +133,7 @@ h1 {
 
 .url-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 38px auto;
+  grid-template-columns: minmax(0, 1fr) auto auto 38px;
   align-items: center;
   gap: 8px;
 }
@@ -188,6 +188,49 @@ button:disabled {
   width: 38px;
   padding: 0;
   line-height: 1;
+}
+
+.browser-button {
+  gap: 7px;
+  min-width: 126px;
+  min-height: 38px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.browser-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.edge-button {
+  border-color: rgba(0, 120, 212, 0.26);
+  background: #fff;
+  color: #064e7a;
+}
+
+.edge-button:not(:disabled):hover {
+  border-color: rgba(0, 120, 212, 0.42);
+  background: #eff6ff;
+}
+
+.chrome-button {
+  border-color: #0067c0;
+  background: #0067c0;
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(0, 103, 192, 0.22);
+}
+
+.chrome-button:not(:disabled):hover {
+  border-color: #005a9e;
+  background: #005a9e;
+}
+
+.chrome-button:not(:disabled):active {
+  border-color: #004578;
+  background: #004578;
 }
 
 .primary-button {
