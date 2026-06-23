@@ -572,6 +572,10 @@ button:active {
   accent-color: var(--primary);
 }
 
+.review-toggle {
+  min-height: 30px;
+}
+
 .quick-issue-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1007,11 +1011,46 @@ button:active {
   gap: 8px;
 }
 
-.pane-title-with-actions .mini-segmented {
+.note-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mini-toggle {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: #475569;
+  padding: 3px 7px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mini-toggle input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.mini-toggle:has(input:checked) {
+  border-color: #99f6e4;
+  background: var(--surface-green);
+  color: var(--primary);
+}
+
+.note-toolbar .mini-segmented {
   flex: 0 0 auto;
 }
 
-.pane-title-with-actions .mini-segmented button {
+.note-toolbar .mini-segmented button {
   min-height: 24px;
   padding: 3px 7px;
   font-size: 12px;

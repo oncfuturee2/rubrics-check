@@ -20,7 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import defaultRubricsReviewTemplate from '../prompt.md?raw';
-import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, extractPageRemarkText, parseRemarkIssues } from './rawRemarkParser.js';
+import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, extractPageRemarkText, formatRemarkTree, parseRemarkIssues } from './rawRemarkParser.js';
 
 const STORAGE_KEY = 'rubrics-qc-workbench.v1';
 const FLOATING_PANEL_STATE_VERSION = 3;
@@ -34,6 +34,7 @@ const INITIAL_FLOATING_PANEL = {
   minimized: false,
   promptMode: 'markdown',
   noteMode: 'current',
+  beautifyNote: true,
 };
 
 const EMPTY_DATA = {
@@ -714,10 +715,13 @@ function CombinedFloatingPanel({
   onToggleMinimize,
   onPromptModeChange,
   onNoteModeChange,
+  onBeautifyNoteChange,
 }) {
   const leftWidth = Math.round(panel.width * panel.split);
   const rightWidth = Math.max(120, panel.width - leftWidth - 9);
-  const noteText = panel.noteMode === 'all' ? note : currentRepoNote;
+  const rawNoteText = panel.noteMode === 'all' ? note : currentRepoNote;
+  const formattedNoteText = panel.beautifyNote ? formatRemarkTree(rawNoteText) : '';
+  const noteText = formattedNoteText || rawNoteText;
   const emptyNoteText = panel.noteMode === 'all' ? '未解析备注' : '当前repo未解析到备注';
 
   return (
@@ -785,21 +789,31 @@ function CombinedFloatingPanel({
             <section className="combined-pane note-pane" style={{ width: rightWidth }}>
               <div className="pane-title pane-title-with-actions">
                 <span>备注</span>
-                <div className="mini-segmented">
-                  <button
-                    type="button"
-                    className={panel.noteMode === 'all' ? 'active' : ''}
-                    onClick={() => onNoteModeChange('all')}
-                  >
-                    全部备注
-                  </button>
-                  <button
-                    type="button"
-                    className={panel.noteMode !== 'all' ? 'active' : ''}
-                    onClick={() => onNoteModeChange('current')}
-                  >
-                    当前repo备注
-                  </button>
+                <div className="note-toolbar">
+                  <label className="mini-toggle">
+                    <input
+                      type="checkbox"
+                      checked={panel.beautifyNote !== false}
+                      onChange={(event) => onBeautifyNoteChange(event.target.checked)}
+                    />
+                    格式美化
+                  </label>
+                  <div className="mini-segmented">
+                    <button
+                      type="button"
+                      className={panel.noteMode === 'all' ? 'active' : ''}
+                      onClick={() => onNoteModeChange('all')}
+                    >
+                      全部备注
+                    </button>
+                    <button
+                      type="button"
+                      className={panel.noteMode !== 'all' ? 'active' : ''}
+                      onClick={() => onNoteModeChange('current')}
+                    >
+                      当前repo备注
+                    </button>
+                  </div>
                 </div>
               </div>
               <pre>{noteText || emptyNoteText}</pre>
@@ -967,6 +981,7 @@ function App() {
   const [reviewPromptTemplate, setReviewPromptTemplate] = useState(DEFAULT_RUBRICS_REVIEW_TEMPLATE);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [rubricsFormatModal, setRubricsFormatModal] = useState(null);
+  const [showAnnotationNotes, setShowAnnotationNotes] = useState(true);
   const rubricListRef = useRef(null);
   const rawParseTimerRef = useRef(null);
 
@@ -1001,6 +1016,7 @@ function App() {
       setParseResult(saved.parseResult || null);
       setReview(saved.review || createReviewState([], [], null, ''));
       setSelectedRepo(saved.selectedRepo || 0);
+      setShowAnnotationNotes(saved.showAnnotationNotes !== false);
       setReviewPromptTemplate(saved.reviewPromptTemplate || DEFAULT_RUBRICS_REVIEW_TEMPLATE);
       const loadedFloatingPanel =
         saved.floatingPanel ||
@@ -1012,6 +1028,7 @@ function App() {
         ...loadedFloatingPanel,
         promptMode: loadedFloatingPanel.promptMode || 'markdown',
         noteMode: loadedFloatingPanel.noteMode || 'current',
+        beautifyNote: loadedFloatingPanel.beautifyNote !== false,
       });
       setRepoTitles(saved.repoTitleVersion === REPO_TITLE_STATE_VERSION ? saved.repoTitles || {} : {});
     } catch (error) {
@@ -1026,6 +1043,7 @@ function App() {
       parseResult,
       review,
       selectedRepo,
+      showAnnotationNotes,
       reviewPromptTemplate,
       floatingPanel,
       floatingPanelVersion: FLOATING_PANEL_STATE_VERSION,
@@ -1033,7 +1051,7 @@ function App() {
       repoTitleVersion: REPO_TITLE_STATE_VERSION,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [rawText, data, parseResult, review, selectedRepo, reviewPromptTemplate, floatingPanel, repoTitles]);
+  }, [rawText, data, parseResult, review, selectedRepo, showAnnotationNotes, reviewPromptTemplate, floatingPanel, repoTitles]);
 
   useEffect(() => {
     if (selectedRepo >= parsed.repos.length) setSelectedRepo(0);
@@ -1276,6 +1294,10 @@ function App() {
 
   function setNoteMode(noteMode) {
     setFloatingPanel((previous) => ({ ...previous, noteMode }));
+  }
+
+  function setBeautifyNote(beautifyNote) {
+    setFloatingPanel((previous) => ({ ...previous, beautifyNote }));
   }
 
   function updatePage(repoIndex, patch) {
@@ -1521,6 +1543,14 @@ function App() {
               <p>{parsed.rubrics.length ? `第 ${selectedRepo + 1} 个页面，共 ${parsed.rubrics.length} 条 rubric` : '等待解析 rubrics'}</p>
             </div>
             <div className="button-row">
+              <label className="mini-toggle review-toggle">
+                <input
+                  type="checkbox"
+                  checked={showAnnotationNotes}
+                  onChange={(event) => setShowAnnotationNotes(event.target.checked)}
+                />
+                显示标注备注
+              </label>
               <button className="ghost-button" type="button" onClick={confirmOriginalForPage} disabled={!currentPage}>
                 <Check size={16} />
                 确认原评分
@@ -1635,7 +1665,7 @@ function App() {
                         </button>
                       </div>
 
-                      {displayedAnnotationNote && (
+                      {showAnnotationNotes && displayedAnnotationNote && (
                         <div className="annotation-note">
                           <strong>标注备注</strong>
                           <p>{displayedAnnotationNote}</p>
@@ -1718,6 +1748,7 @@ function App() {
         onToggleMinimize={toggleFloatingPanel}
         onPromptModeChange={setPromptMode}
         onNoteModeChange={setNoteMode}
+        onBeautifyNoteChange={setBeautifyNote}
       />
 
       {isTemplateModalOpen && (

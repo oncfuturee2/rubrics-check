@@ -110,3 +110,28 @@ export function extractPageRemarkText(noteText, pageIndex) {
     })
     .join('\n');
 }
+
+export function formatRemarkTree(noteText) {
+  const text = String(noteText || '').replace(/\r\n/g, '\n');
+  const issueMap = parseRemarkIssues(text);
+  const pageMap = new Map();
+
+  issueMap.forEach((description, key) => {
+    const [pageIndexText, rubricIndexText] = key.split(':');
+    const pageNumber = Number(pageIndexText) + 1;
+    const rubricNumber = Number(rubricIndexText) + 1;
+    if (!Number.isInteger(pageNumber) || !Number.isInteger(rubricNumber)) return;
+    if (!pageMap.has(pageNumber)) pageMap.set(pageNumber, []);
+    pageMap.get(pageNumber).push({ rubricNumber, description });
+  });
+
+  return [...pageMap.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([pageNumber, issues]) => {
+      const issueLines = issues
+        .sort((left, right) => left.rubricNumber - right.rubricNumber)
+        .map((issue) => `  └ 第${issue.rubricNumber}条rubrics：${issue.description}`);
+      return [`第${pageNumber}个页面`, ...issueLines].join('\n');
+    })
+    .join('\n\n');
+}
