@@ -133,7 +133,7 @@ h1 {
 
 .url-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto 38px;
+  grid-template-columns: minmax(0, 1fr) 38px auto auto;
   align-items: center;
   gap: 8px;
 }
