@@ -1174,9 +1174,11 @@ function App() {
 
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
     };
   }, [panelInteraction]);
 
@@ -1251,6 +1253,7 @@ function App() {
 
   function startFloatingDrag(event) {
     if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     setPanelInteraction({
       type: 'move',
       startX: event.clientX,
@@ -1263,6 +1266,7 @@ function App() {
 
   function startSplitDrag(event) {
     if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     setPanelInteraction({
       type: 'split',
       startX: event.clientX,
@@ -1274,6 +1278,7 @@ function App() {
 
   function startResizeDrag(event) {
     if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     setPanelInteraction({
       type: 'resize',
       startX: event.clientX,
@@ -1396,7 +1401,7 @@ function App() {
   }
 
   return (
-    <div className={`app-shell ${isRawInputValid ? '' : 'input-invalid'}`}>
+    <div className={`app-shell ${isRawInputValid ? '' : 'input-invalid'} ${panelInteraction ? 'dragging-panel' : ''}`}>
       <main className="workbench-grid">
         <section className="left-workspace">
           <section className="input-panel">
@@ -1769,6 +1774,8 @@ function App() {
           onConfirm={applyRubricsFormatFix}
         />
       )}
+
+      {panelInteraction && <div className="drag-interaction-shield" />}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

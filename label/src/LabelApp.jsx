@@ -1328,6 +1328,7 @@ function LabelApp() {
 
   function startPromptPanelDrag(event) {
     if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     setPromptPanelInteraction({
       type: 'move',
       startX: event.clientX,
@@ -1340,6 +1341,7 @@ function LabelApp() {
 
   function startPromptPanelResize(event) {
     if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     setPromptPanelInteraction({
       type: 'resize',
       startX: event.clientX,
@@ -1422,7 +1424,7 @@ function LabelApp() {
   }
 
   return (
-    <div className={`app-shell label-app ${isRawInputValid ? '' : 'input-invalid'}`}>
+    <div className={`app-shell label-app ${isRawInputValid ? '' : 'input-invalid'} ${promptPanelInteraction ? 'dragging-panel' : ''}`}>
       <main className="workbench-grid">
         <section className="left-workspace">
           <section className="input-panel">
@@ -1798,6 +1800,8 @@ function LabelApp() {
           onConfirm={applyRubricsFormatFix}
         />
       )}
+
+      {promptPanelInteraction && <div className="drag-interaction-shield" />}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

@@ -505,6 +505,23 @@ button:active {
   background: #fff;
 }
 
+.app-shell.dragging-panel iframe {
+  pointer-events: none;
+}
+
+.drag-interaction-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  background: transparent;
+  cursor: grabbing;
+}
+
+.app-shell.dragging-panel {
+  cursor: grabbing;
+  user-select: none;
+}
+
 .empty-state {
   display: grid;
   place-items: center;
