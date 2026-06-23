@@ -98,9 +98,15 @@ export function parseRemarkIssues(noteText) {
 export function extractPageRemarkText(noteText, pageIndex) {
   const text = String(noteText || '').replace(/\r\n/g, '\n');
   const pageTokens = getRemarkTokens(text).filter((token) => token.type === 'page');
-  const target = pageTokens.find((token) => token.pageNumber - 1 === pageIndex);
-  if (!target) return '';
-
-  const nextPage = pageTokens.find((token) => token.index > target.index);
-  return text.slice(target.index, nextPage ? nextPage.index : text.length).trim();
+  return pageTokens
+    .flatMap((token, index) => {
+      if (token.pageNumber - 1 !== pageIndex) return [];
+      const nextPage = pageTokens[index + 1];
+      const chunk = text
+        .slice(token.index, nextPage ? nextPage.index : text.length)
+        .replace(/\s*\n\s*\d+\s*[.、)]\s*$/, '')
+        .trim();
+      return chunk ? [chunk] : [];
+    })
+    .join('\n');
 }
