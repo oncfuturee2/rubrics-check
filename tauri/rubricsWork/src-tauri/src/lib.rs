@@ -133,16 +133,34 @@ fn run_server(listener: TcpListener) {
 }
 
 fn handle_client(mut stream: TcpStream) {
-    let mut buffer = [0_u8; 8192];
-    let bytes_read = match stream.read(&mut buffer) {
-        Ok(0) | Err(_) => return,
-        Ok(size) => size,
+    let Ok((method, target, body)) = read_http_request(&mut stream) else {
+        return;
     };
-    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let request = format!("{method} {target} HTTP/1.1");
     let first_line = request.lines().next().unwrap_or_default();
     let mut parts = first_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let target = parts.next().unwrap_or("/");
+
+    if target.starts_with("/api/ai/proxy") {
+        if method == "OPTIONS" {
+            write_response(&mut stream, 204, "text/plain; charset=utf-8", b"", false);
+            return;
+        }
+        if method != "POST" {
+            write_response(&mut stream, 405, "application/json; charset=utf-8", br#"{"error":"method not allowed"}"#, false);
+            return;
+        }
+        let (status, response_body) = ai_proxy_response(&body);
+        write_response(
+            &mut stream,
+            status,
+            "application/json; charset=utf-8",
+            response_body.as_bytes(),
+            false,
+        );
+        return;
+    }
 
     if method != "GET" && method != "HEAD" {
         write_response(&mut stream, 405, "text/plain; charset=utf-8", b"Method Not Allowed", method == "HEAD");
@@ -165,6 +183,63 @@ fn handle_client(mut stream: TcpStream) {
         Some((key, body)) => write_response(&mut stream, 200, mime_for_key(&key), body, method == "HEAD"),
         None => write_response(&mut stream, 404, "text/plain; charset=utf-8", b"Not Found", method == "HEAD"),
     }
+}
+
+fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String), ()> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    let mut header_end = None;
+    let mut content_length = 0_usize;
+
+    loop {
+        let bytes_read = stream.read(&mut chunk).map_err(|_| ())?;
+        if bytes_read == 0 {
+            return Err(());
+        }
+        buffer.extend_from_slice(&chunk[..bytes_read]);
+
+        if header_end.is_none() {
+            header_end = find_header_end(&buffer);
+            if let Some(end) = header_end {
+                let header_text = String::from_utf8_lossy(&buffer[..end]);
+                content_length = parse_content_length(&header_text);
+            }
+        }
+
+        if let Some(end) = header_end {
+            let body_start = end + 4;
+            if buffer.len() >= body_start + content_length {
+                let header_text = String::from_utf8_lossy(&buffer[..end]);
+                let first_line = header_text.lines().next().unwrap_or_default();
+                let mut parts = first_line.split_whitespace();
+                let method = parts.next().unwrap_or_default().to_string();
+                let target = parts.next().unwrap_or("/").to_string();
+                let body = String::from_utf8_lossy(&buffer[body_start..body_start + content_length]).into_owned();
+                return Ok((method, target, body));
+            }
+        }
+
+        if buffer.len() > 8 * 1024 * 1024 {
+            return Err(());
+        }
+    }
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn parse_content_length(headers: &str) -> usize {
+    headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0)
 }
 
 fn resolve_static_key(target: &str) -> Option<String> {
@@ -192,6 +267,67 @@ fn resolve_static_key(target: &str) -> Option<String> {
     } else {
         let index_key = format!("{key}/index.html");
         embedded_asset(&index_key).map(|_| index_key)
+    }
+}
+
+fn ai_proxy_response(body: &str) -> (u16, String) {
+    let payload: serde_json::Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(error) => return (400, format!(r#"{{"error":"{}"}}"#, json_escape(&error.to_string()))),
+    };
+
+    let url = payload
+        .get("url")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return (400, r#"{"error":"invalid url"}"#.to_string());
+    }
+
+    let method = payload
+        .get("method")
+        .and_then(|value| value.as_str())
+        .unwrap_or("GET")
+        .to_ascii_uppercase();
+    let reqwest_method = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
+
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .user_agent("Rubrics Workbench AI Proxy")
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return (502, format!(r#"{{"error":"{}"}}"#, json_escape(&error.to_string()))),
+    };
+
+    let mut request = client.request(reqwest_method, url);
+    if let Some(headers) = payload.get("headers").and_then(|value| value.as_object()) {
+        for (name, value) in headers {
+            let lower_name = name.to_ascii_lowercase();
+            if lower_name == "host" || lower_name == "content-length" {
+                continue;
+            }
+            if let Some(header_value) = value.as_str() {
+                request = request.header(name, header_value);
+            }
+        }
+    }
+
+    if let Some(request_body) = payload.get("body") {
+        if !request_body.is_null() {
+            request = request.body(request_body.to_string());
+        }
+    }
+
+    match request.send() {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            match response.text() {
+                Ok(text) => (status, text),
+                Err(error) => (502, format!(r#"{{"error":"{}"}}"#, json_escape(&error.to_string()))),
+            }
+        }
+        Err(error) => (502, format!(r#"{{"error":"{}"}}"#, json_escape(&error.to_string()))),
     }
 }
 
@@ -254,12 +390,15 @@ fn extract_title(html: &str) -> String {
 fn write_response(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8], head_only: bool) {
     let reason = match status {
         200 => "OK",
+        204 => "No Content",
+        400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        502 => "Bad Gateway",
         _ => "OK",
     };
     let header = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type, authorization, x-api-key, anthropic-version\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nConnection: close\r\n\r\n",
         body.len()
     );
     let _ = stream.write_all(header.as_bytes());

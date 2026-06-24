@@ -480,10 +480,48 @@ pre {
 .ai-settings-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  align-content: start;
+  align-items: start;
+  gap: 12px;
 }
 
-.ai-settings-form label,
+.ai-settings-intro {
+  grid-column: 1 / -1;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  padding: 10px 12px;
+}
+
+.ai-settings-intro strong {
+  display: block;
+  margin-bottom: 3px;
+  color: #1e3a8a;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.ai-settings-intro p {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-settings-form label {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+}
+
 .ai-prompt-settings label {
   display: grid;
   gap: 6px;
@@ -492,10 +530,50 @@ pre {
   font-weight: 900;
 }
 
+.ai-settings-form label > span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.ai-settings-form label > small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.ai-settings-form label > em {
+  color: var(--primary);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.ai-model-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-model-input-row input,
+.ai-model-input-row select {
+  min-width: 0;
+  flex: 1;
+}
+
+.ai-model-input-row .ghost-button {
+  flex: 0 0 auto;
+  min-height: 38px;
+}
+
 .ai-settings-form input,
 .ai-settings-form select {
   width: 100%;
-  min-height: 36px;
+  height: 38px;
+  min-height: 38px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
@@ -503,6 +581,7 @@ pre {
   outline: none;
   padding: 7px 9px;
   font: inherit;
+  font-weight: 700;
 }
 
 .ai-settings-form input:focus,
@@ -632,7 +711,7 @@ pre {
   font-size: 12px;
 }
 
-.ai-prompt-preview > div {
+.ai-prompt-preview-body {
   flex: 1;
   min-height: 0;
   overflow: auto;

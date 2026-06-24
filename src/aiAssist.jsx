@@ -184,15 +184,27 @@ function extractTextFromResponse(mode, payload) {
 }
 
 async function postJson(url, headers, body) {
-  const response = await fetch(url, {
+  return requestProxy({
+    url,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...headers,
     },
-    body: JSON.stringify(body),
+    body,
   });
+}
 
+async function getJson(url, headers = {}) {
+  return requestProxy({ url, method: 'GET', headers });
+}
+
+async function requestProxy({ url, method, headers = {}, body = null }) {
+  const response = await fetch('/api/ai/proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, method, headers, body }),
+  });
   const text = await response.text();
   let payload = null;
   try {
@@ -207,6 +219,49 @@ async function postJson(url, headers, body) {
   }
 
   return payload;
+}
+
+function extractModelsFromPayload(mode, payload) {
+  if (mode === 'ollama') {
+    return (payload.models || []).map((model) => model.name).filter(Boolean);
+  }
+
+  if (mode === 'gemini') {
+    return (payload.models || [])
+      .map((model) => String(model.name || '').replace(/^models\//, ''))
+      .filter(Boolean);
+  }
+
+  return (payload.data || [])
+    .map((model) => model.id || model.name)
+    .filter(Boolean);
+}
+
+async function fetchModelList(profile) {
+  const baseUrl = normalizeBaseUrl(profile.baseUrl);
+  if (!baseUrl) throw new Error('请先配置 Base URL');
+  if (profile.mode !== 'ollama' && !profile.apiKey) throw new Error('请先配置 API Key');
+
+  if (profile.mode === 'ollama') {
+    return extractModelsFromPayload(profile.mode, await getJson(`${baseUrl}/api/tags`));
+  }
+
+  if (profile.mode === 'gemini') {
+    const keyParam = profile.apiKey ? `?key=${encodeURIComponent(profile.apiKey)}` : '';
+    return extractModelsFromPayload(profile.mode, await getJson(`${baseUrl}/models${keyParam}`));
+  }
+
+  if (profile.mode === 'anthropic') {
+    return extractModelsFromPayload(
+      profile.mode,
+      await getJson(`${baseUrl}/models`, {
+        ...authHeaders(profile),
+        'anthropic-version': '2023-06-01',
+      }),
+    );
+  }
+
+  return extractModelsFromPayload(profile.mode, await getJson(`${baseUrl}/models`, authHeaders(profile)));
 }
 
 async function requestAi(profile, promptText, modeName) {
@@ -513,6 +568,9 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
   const [section, setSection] = useState('api');
   const [draft, setDraft] = useState(settings);
   const [previewMode, setPreviewMode] = useState('markdown');
+  const [modelOptions, setModelOptions] = useState([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelListMessage, setModelListMessage] = useState('');
   const promptTextareaRef = useRef(null);
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) || draft.profiles[0];
   const promptKey = activeType === 'generate' ? 'generate' : 'precheck';
@@ -521,11 +579,37 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
   const currentPromptText = promptTemplate?.template ?? draft.prompts[promptKey] ?? '';
   const currentPromptPreview = promptTemplate?.preview ?? fillTemplate(currentPromptText, context);
 
+  useEffect(() => {
+    setModelOptions([]);
+    setModelListMessage('');
+  }, [draft.activeProfileId, activeProfile.mode, activeProfile.baseUrl, activeProfile.apiKey]);
+
   function updateActiveProfile(patch) {
     setDraft((previous) => ({
       ...previous,
       profiles: previous.profiles.map((profile) => (profile.id === previous.activeProfileId ? { ...profile, ...patch } : profile)),
     }));
+  }
+
+  async function loadModels() {
+    setLoadingModels(true);
+    setModelListMessage('');
+    try {
+      const models = await fetchModelList(activeProfile);
+      const uniqueModels = [...new Set(models)].sort((left, right) => left.localeCompare(right));
+      setModelOptions(uniqueModels);
+      if (uniqueModels.length) {
+        setModelListMessage(`已获取 ${uniqueModels.length} 个模型`);
+        if (!activeProfile.model) updateActiveProfile({ model: uniqueModels[0] });
+      } else {
+        setModelListMessage('接口没有返回可用模型，请手动填写模型名称');
+      }
+    } catch (error) {
+      setModelOptions([]);
+      setModelListMessage(`获取失败：${String(error.message || error)}`);
+    } finally {
+      setLoadingModels(false);
+    }
   }
 
   function updatePrompt(key, value) {
@@ -599,8 +683,12 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
           <div className="ai-settings-content">
             {section === 'api' ? (
               <div className="ai-settings-form">
+                <div className="ai-settings-intro">
+                  <strong>模型连接配置</strong>
+                  <p>选择接口模式后填写对应的 Base URL、API Key 和模型名称。Ollama 本地模式通常不需要 API Key。</p>
+                </div>
                 <label>
-                  当前模型
+                  <span>当前模型配置</span>
                   <select value={draft.activeProfileId} onChange={(event) => setDraft((previous) => ({ ...previous, activeProfileId: event.target.value }))}>
                     {draft.profiles.map((profile) => (
                       <option key={profile.id} value={profile.id}>
@@ -608,9 +696,10 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                       </option>
                     ))}
                   </select>
+                  <small>选择要编辑和调用的模型预设。</small>
                 </label>
                 <label>
-                  接口模式
+                  <span>接口模式</span>
                   <select value={activeProfile.mode} onChange={(event) => updateActiveProfile({ mode: event.target.value })}>
                     {Object.entries(MODE_LABELS).map(([value, label]) => (
                       <option key={value} value={value}>
@@ -618,30 +707,56 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                       </option>
                     ))}
                   </select>
+                  <small>OpenAI Responses 适合官方新版接口；OpenAI兼容 Chat 适合多数中转或兼容服务。</small>
                 </label>
                 <label>
-                  显示名称
+                  <span>显示名称</span>
                   <input value={activeProfile.name} onChange={(event) => updateActiveProfile({ name: event.target.value })} />
+                  <small>显示在模型下拉菜单里的名称。</small>
                 </label>
                 <label>
-                  Base URL
+                  <span>Base URL</span>
                   <input value={activeProfile.baseUrl} onChange={(event) => updateActiveProfile({ baseUrl: event.target.value })} />
+                  <small>例如 https://api.openai.com/v1 或 http://localhost:11434。</small>
                 </label>
                 <label>
-                  API Key
+                  <span>API Key</span>
                   <input type="password" value={activeProfile.apiKey} onChange={(event) => updateActiveProfile({ apiKey: event.target.value })} placeholder="Ollama 本地模式可留空" />
+                  <small>密钥只保存在当前浏览器本地存储中。</small>
                 </label>
                 <label>
-                  模型名称
-                  <input value={activeProfile.model} onChange={(event) => updateActiveProfile({ model: event.target.value })} />
+                  <span>模型名称</span>
+                  <div className="ai-model-input-row">
+                    {modelOptions.length ? (
+                      <select value={activeProfile.model} onChange={(event) => updateActiveProfile({ model: event.target.value })}>
+                        {!modelOptions.includes(activeProfile.model) && activeProfile.model && (
+                          <option value={activeProfile.model}>{activeProfile.model}</option>
+                        )}
+                        {modelOptions.map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input value={activeProfile.model} onChange={(event) => updateActiveProfile({ model: event.target.value })} />
+                    )}
+                    <button className="ghost-button" type="button" onClick={loadModels} disabled={loadingModels}>
+                      {loadingModels ? '获取中' : '获取模型'}
+                    </button>
+                  </div>
+                  <small>填写服务商要求的模型 ID，例如 gpt-4.1-mini、claude-3-5-sonnet-latest。</small>
+                  {modelListMessage && <em>{modelListMessage}</em>}
                 </label>
                 <label>
-                  温度
+                  <span>温度</span>
                   <input type="number" min="0" max="2" step="0.1" value={activeProfile.temperature} onChange={(event) => updateActiveProfile({ temperature: event.target.value })} />
+                  <small>越低越稳定，质检和标注建议 0.1 到 0.3。</small>
                 </label>
                 <label>
-                  最大输出
+                  <span>最大输出 Token</span>
                   <input type="number" min="256" step="128" value={activeProfile.maxTokens} onChange={(event) => updateActiveProfile({ maxTokens: event.target.value })} />
+                  <small>控制模型最多返回多少内容，rubrics 场景建议 1200 到 3000。</small>
                 </label>
               </div>
             ) : (
@@ -695,7 +810,7 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                           </button>
                         </div>
                       </div>
-                      <div>
+                      <div className="ai-prompt-preview-body">
                         <pre>{(previewMode === 'markdown' ? currentPromptPreview : currentPromptText) || ' '}</pre>
                       </div>
                     </section>

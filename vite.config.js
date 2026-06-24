@@ -78,7 +78,7 @@ function fetchHtml(url) {
 
 function pageTitleMiddleware() {
   return {
-    name: 'page-title-middleware',
+    name: 'local-api-middleware',
     configureServer(server) {
       server.middlewares.use('/api/page-title', async (request, response) => {
         try {
@@ -99,8 +99,63 @@ function pageTitleMiddleware() {
           response.end(JSON.stringify({ title: '', error: error.message }));
         }
       });
+
+      server.middlewares.use('/api/ai/proxy', async (request, response) => {
+        if (request.method === 'OPTIONS') {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+
+        if (request.method !== 'POST') {
+          response.statusCode = 405;
+          response.end(JSON.stringify({ error: 'method not allowed' }));
+          return;
+        }
+
+        try {
+          const payload = JSON.parse(await readRequestBody(request));
+          const targetUrl = String(payload.url || '');
+          if (!/^https?:\/\//i.test(targetUrl)) {
+            response.statusCode = 400;
+            response.end(JSON.stringify({ error: 'invalid url' }));
+            return;
+          }
+
+          const headers = { ...(payload.headers || {}) };
+          delete headers.host;
+          delete headers['content-length'];
+
+          const upstream = await fetch(targetUrl, {
+            method: payload.method || 'GET',
+            headers,
+            body: payload.body == null ? undefined : JSON.stringify(payload.body),
+          });
+          const text = await upstream.text();
+          response.statusCode = upstream.status;
+          response.setHeader('content-type', upstream.headers.get('content-type') || 'application/json; charset=utf-8');
+          response.end(text);
+        } catch (error) {
+          response.statusCode = 502;
+          response.setHeader('content-type', 'application/json; charset=utf-8');
+          response.end(JSON.stringify({ error: error.message }));
+        }
+      });
     },
   };
+}
+
+function readRequestBody(request) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 8 * 1024 * 1024) reject(new Error('request body too large'));
+    });
+    request.on('end', () => resolve(body));
+    request.on('error', reject);
+  });
 }
 
 export default defineConfig({
