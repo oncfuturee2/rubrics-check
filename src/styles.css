@@ -420,9 +420,9 @@ pre {
 
 .ai-settings-panel {
   display: flex;
-  width: min(980px, calc(100vw - 36px));
-  height: min(720px, calc(100vh - 36px));
-  min-height: 460px;
+  width: min(1240px, calc(100vw - 24px));
+  height: min(860px, calc(100vh - 24px));
+  min-height: 560px;
   flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -574,6 +574,74 @@ pre {
   min-height: 0;
   flex: 1;
   flex-direction: column;
+  gap: 0 !important;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.ai-prompt-editor > span,
+.ai-prompt-pane-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 38px;
+  border-bottom: 1px solid var(--border);
+  background: #eef2f7;
+  padding: 7px 10px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.ai-prompt-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+
+.ai-prompt-settings.with-preview .ai-prompt-workspace {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.ai-prompt-preview {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.ai-prompt-preview .ai-prompt-pane-title {
+  border-bottom: 1px solid #bfdbfe;
+  background: #eef2f7;
+  color: #334155;
+}
+
+.ai-prompt-pane-title .mini-segmented button {
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.ai-prompt-preview > div {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #fff;
+  padding: 12px;
+}
+
+.ai-prompt-preview pre {
+  font-size: 12px;
 }
 
 .ai-prompt-settings textarea {
@@ -581,6 +649,8 @@ pre {
   height: 100%;
   flex: 1;
   resize: none;
+  border: 0;
+  border-radius: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono CJK SC", monospace;
 }
 
@@ -952,7 +1022,21 @@ button:active {
 .rubric-tool-strip .ai-assist-field {
   width: auto;
   min-width: 0;
+}
+
+.rubric-tool-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
   margin-left: auto;
+}
+
+.prompt-copy-button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  white-space: nowrap;
 }
 
 .side-top-field {

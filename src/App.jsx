@@ -15,7 +15,6 @@ import {
   Move,
   RefreshCw,
   RotateCcw,
-  Settings,
   Trash2,
   X,
 } from 'lucide-react';
@@ -790,51 +789,6 @@ function AnimatedIssueTextarea({ className, value, onChange, placeholder }) {
   );
 }
 
-function PromptTemplateModal({ template, previewText, onChange, onClose, onReset }) {
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="template-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="rubrics质检提示词设置"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className="template-modal-head">
-          <div>
-            <h2>rubrics质检提示词设置</h2>
-            <p>占位符：&amp;{'{prompt}'} / &amp;{'{rubrics}'}</p>
-          </div>
-          <div className="button-row">
-            <button className="ghost-button" type="button" onClick={onReset}>
-              <RotateCcw size={16} />
-              恢复初始模板
-            </button>
-            <button className="icon-button" type="button" title="关闭" onClick={onClose}>
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-
-        <div className="template-modal-body">
-          <section className="template-editor">
-            <div className="template-editor-title">原始模板</div>
-            <textarea
-              value={template}
-              onChange={(event) => onChange(event.target.value)}
-              spellCheck="false"
-            />
-          </section>
-          <section className="template-preview">
-            <div className="template-preview-title">Markdown预览</div>
-            <div className="prompt-content markdown">{renderMarkdownBlocks(previewText || ' ')}</div>
-          </section>
-        </div>
-      </section>
-    </div>
-  );
-}
-
 function RubricsFormatModal({ value, onChange, onConfirm, onClose }) {
   const issueNumbers = getRubricNumberSpacingIssueNumbers(value);
   const issueText = issueNumbers.length
@@ -898,7 +852,6 @@ function App() {
   const [isFrameFullscreen, setIsFrameFullscreen] = useState(false);
   const [repoTitles, setRepoTitles] = useState({});
   const [reviewPromptTemplate, setReviewPromptTemplate] = useState(DEFAULT_RUBRICS_REVIEW_TEMPLATE);
-  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [rubricsFormatModal, setRubricsFormatModal] = useState(null);
   const [showAnnotationNotes, setShowAnnotationNotes] = useState(true);
   const rubricListRef = useRef(null);
@@ -1332,24 +1285,6 @@ function App() {
                 </div>
               </div>
               <div className="button-row">
-                <div className="split-capsule">
-                  <button
-                    className="split-capsule-main"
-                    type="button"
-                    onClick={() => copyAndToast(reviewPromptText, '已复制 rubrics 质检提示词')}
-                  >
-                    <Clipboard size={16} />
-                    rubrics质检提示词
-                  </button>
-                  <button
-                    className="split-capsule-icon"
-                    type="button"
-                    title="设置rubrics质检提示词"
-                    onClick={() => setIsTemplateModalOpen(true)}
-                  >
-                    <Settings size={16} />
-                  </button>
-                </div>
                 <button className="primary-button" type="button" onClick={() => parseAndApply()}>
                   <ListChecks size={16} />
                   解析
@@ -1469,17 +1404,34 @@ function App() {
                 <div className="rubric-column">
                   <div className="rubric-tool-strip">
                     <strong>Rubrics列表</strong>
-                    <AiAssistField
-                      type="precheck"
-                      title="AI预检Rubrics"
-                      value={review.promptRubricIssues}
-                      onChange={(nextValue) => setReview((previous) => ({ ...previous, promptRubricIssues: nextValue }))}
-                      context={aiPlaceholderContext}
-                      placeholder="粘贴 AI 核查 rubrics 后给出的质量问题"
-                      manualPlaceholder="手动输入或粘贴 Rubrics质检备注"
-                      disabled={!data.prompt?.trim() || !data.rubrics?.trim()}
-                      onStatus={setToast}
-                    />
+                    <div className="rubric-tool-actions">
+                      <button
+                        className="ghost-button prompt-copy-button"
+                        type="button"
+                        onClick={() => copyAndToast(reviewPromptText, '已复制 rubrics 质检提示词')}
+                      >
+                        <Clipboard size={16} />
+                        rubrics质检提示词
+                      </button>
+                      <AiAssistField
+                        type="precheck"
+                        title="AI预检Rubrics"
+                        value={review.promptRubricIssues}
+                        onChange={(nextValue) => setReview((previous) => ({ ...previous, promptRubricIssues: nextValue }))}
+                        context={aiPlaceholderContext}
+                        placeholder="粘贴 AI 核查 rubrics 后给出的质量问题"
+                        manualPlaceholder="手动输入或粘贴 Rubrics质检备注"
+                        disabled={!data.prompt?.trim() || !data.rubrics?.trim()}
+                        onStatus={setToast}
+                        promptTemplate={{
+                          title: 'rubrics质检提示词',
+                          template: reviewPromptTemplate,
+                          preview: reviewPromptText,
+                          onChange: setReviewPromptTemplate,
+                          onReset: () => setReviewPromptTemplate(DEFAULT_RUBRICS_REVIEW_TEMPLATE),
+                        }}
+                      />
+                    </div>
                   </div>
                   <div className="rubric-list" ref={rubricListRef}>
                   {parsed.rubrics.map((rubric, rubricIndex) => {
@@ -1649,16 +1601,6 @@ function App() {
         onNoteModeChange={setNoteMode}
         onBeautifyNoteChange={setBeautifyNote}
       />
-
-      {isTemplateModalOpen && (
-        <PromptTemplateModal
-          template={reviewPromptTemplate}
-          previewText={reviewPromptText}
-          onChange={setReviewPromptTemplate}
-          onClose={() => setIsTemplateModalOpen(false)}
-          onReset={() => setReviewPromptTemplate(DEFAULT_RUBRICS_REVIEW_TEMPLATE)}
-        />
-      )}
 
       {rubricsFormatModal && (
         <RubricsFormatModal

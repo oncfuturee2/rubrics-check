@@ -129,9 +129,18 @@ function fillTemplate(template, context) {
 }
 
 function buildPlaceholderEntries(context) {
+  if (Array.isArray(context?.__placeholderEntries) && context.__placeholderEntries.length) {
+    return context.__placeholderEntries.map((entry) => ({
+      key: entry.key,
+      label: entry.label || entry.key,
+      token: `&{${entry.key}}`,
+      column: entry.column,
+    }));
+  }
+
   return Object.keys(context || {})
     .filter((key) => key && !key.startsWith('__') && typeof context[key] !== 'function')
-    .map((key) => ({ key, token: `&{${key}}` }));
+    .map((key) => ({ key, label: key, token: `&{${key}}` }));
 }
 
 function normalizeBaseUrl(baseUrl) {
@@ -318,6 +327,7 @@ export function AiAssistField({
   manualPlaceholder,
   disabled = false,
   onStatus,
+  promptTemplate,
 }) {
   const [settings, setSettings] = useState(loadAiSettings);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -377,7 +387,7 @@ export function AiAssistField({
 
   async function runAi() {
     if (disabled || running) return;
-    const template = settings.prompts[type] || DEFAULT_PROMPTS[type];
+    const template = promptTemplate?.template ?? settings.prompts[type] ?? DEFAULT_PROMPTS[type];
     const promptText = fillTemplate(template, context);
     if (!promptText.trim()) {
       onStatus?.('没有可发送给 AI 的内容。');
@@ -492,20 +502,24 @@ export function AiAssistField({
           onClose={() => setSettingsOpen(false)}
           activeType={type}
           context={context}
+          promptTemplate={promptTemplate}
         />
       )}
     </div>
   );
 }
 
-function AiSettingsPanel({ settings, onChange, onClose, activeType, context }) {
+function AiSettingsPanel({ settings, onChange, onClose, activeType, context, promptTemplate }) {
   const [section, setSection] = useState('api');
   const [draft, setDraft] = useState(settings);
+  const [previewMode, setPreviewMode] = useState('markdown');
   const promptTextareaRef = useRef(null);
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) || draft.profiles[0];
   const promptKey = activeType === 'generate' ? 'generate' : 'precheck';
   const promptTitle = promptKey === 'generate' ? 'AI预生成Rubrics提示词' : 'AI预检Rubrics提示词';
   const placeholderEntries = useMemo(() => buildPlaceholderEntries(context), [context]);
+  const currentPromptText = promptTemplate?.template ?? draft.prompts[promptKey] ?? '';
+  const currentPromptPreview = promptTemplate?.preview ?? fillTemplate(currentPromptText, context);
 
   function updateActiveProfile(patch) {
     setDraft((previous) => ({
@@ -521,23 +535,35 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context }) {
     }));
   }
 
+  function updateCurrentPrompt(value) {
+    if (promptTemplate?.onChange) {
+      promptTemplate.onChange(value);
+      return;
+    }
+    updatePrompt(promptKey, value);
+  }
+
   function save() {
     onChange(draft);
     onClose();
   }
 
   function resetPrompts() {
+    if (promptTemplate?.onReset) {
+      promptTemplate.onReset();
+      return;
+    }
     setDraft((previous) => ({ ...previous, prompts: DEFAULT_PROMPTS }));
   }
 
   function insertPlaceholder(key) {
     const token = `&{${key}}`;
     const textarea = promptTextareaRef.current;
-    const current = draft.prompts[promptKey] || '';
+    const current = currentPromptText || '';
     const start = textarea?.selectionStart ?? current.length;
     const end = textarea?.selectionEnd ?? current.length;
     const next = `${current.slice(0, start)}${token}${current.slice(end)}`;
-    updatePrompt(promptKey, next);
+    updateCurrentPrompt(next);
     window.requestAnimationFrame(() => {
       const target = promptTextareaRef.current;
       if (!target) return;
@@ -619,14 +645,19 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context }) {
                 </label>
               </div>
             ) : (
-              <div className="ai-prompt-settings">
+              <div className={`ai-prompt-settings ${promptTemplate ? 'with-preview' : ''}`}>
                 <div className="ai-prompt-toolbar">
-                  <strong>{promptTitle}</strong>
+                  <strong>{promptTemplate?.title || promptTitle}</strong>
                   <div className="ai-placeholder-buttons" aria-label="快捷插入占位符">
                     {placeholderEntries.length ? (
                       placeholderEntries.map((entry) => (
-                        <button key={entry.key} type="button" onClick={() => insertPlaceholder(entry.key)}>
-                          {entry.token}
+                        <button
+                          key={`${entry.column || ''}-${entry.key}`}
+                          type="button"
+                          title={`${entry.column ? `第${entry.column}列：` : ''}插入 ${entry.token}`}
+                          onClick={() => insertPlaceholder(entry.key)}
+                        >
+                          {entry.label}
                         </button>
                       ))
                     ) : (
@@ -634,14 +665,42 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context }) {
                     )}
                   </div>
                 </div>
-                <label className="ai-prompt-editor">
-                  <span>原始模板</span>
-                  <textarea
-                    ref={promptTextareaRef}
-                    value={draft.prompts[promptKey] || ''}
-                    onChange={(event) => updatePrompt(promptKey, event.target.value)}
-                  />
-                </label>
+                <div className="ai-prompt-workspace">
+                  <label className="ai-prompt-editor">
+                    <span>原始模板</span>
+                    <textarea
+                      ref={promptTextareaRef}
+                      value={currentPromptText}
+                      onChange={(event) => updateCurrentPrompt(event.target.value)}
+                    />
+                  </label>
+                  {promptTemplate && (
+                    <section className="ai-prompt-preview">
+                      <div className="ai-prompt-pane-title">
+                        <strong>Markdown预览</strong>
+                        <div className="mini-segmented">
+                          <button
+                            type="button"
+                            className={previewMode === 'markdown' ? 'active' : ''}
+                            onClick={() => setPreviewMode('markdown')}
+                          >
+                            Markdown
+                          </button>
+                          <button
+                            type="button"
+                            className={previewMode === 'raw' ? 'active' : ''}
+                            onClick={() => setPreviewMode('raw')}
+                          >
+                            原始
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <pre>{(previewMode === 'markdown' ? currentPromptPreview : currentPromptText) || ' '}</pre>
+                      </div>
+                    </section>
+                  )}
+                </div>
                 <p>点击上方按钮可插入占位符，发送 AI 请求时会用当前解析出的原始数据列自动替换。</p>
               </div>
             )}

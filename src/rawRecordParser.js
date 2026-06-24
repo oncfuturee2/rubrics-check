@@ -61,6 +61,28 @@ const SCORE_RELATIVE_FIELDS = [
   'sampleDate',
 ];
 
+const PROMPT_PLACEHOLDERS = [
+  { key: 'uid', label: 'uid', column: 1 },
+  { key: 'prompt', label: 'prompt', column: 2 },
+  { key: 'repo', label: 'repo', column: 3 },
+  { key: 'taskType', label: '任务类型', column: 4 },
+  { key: 'rubrics', label: 'rubrics', column: 5 },
+  { key: 'score', label: '评分', column: 6 },
+  { key: 'note', label: '备注', column: 7 },
+  { key: 'annotator', label: '标注人', column: 8 },
+  { key: 'date', label: '日期', column: 9 },
+  { key: 'rescan', label: '回扫', column: 10 },
+  { key: 'supplier', label: '供应商', column: 11 },
+  { key: 'deliveryBatch', label: '交付批次', column: 12 },
+  { key: 'internalQc', label: '内部质检', column: 13 },
+  { key: 'qcPerson', label: '质检人', column: 14 },
+  { key: 'qcComment', label: '备注', column: 15 },
+  { key: 'internalSample', label: '内部抽检', column: 16 },
+  { key: 'samplePerson', label: '抽检人', column: 17 },
+  { key: 'sampleComment', label: '备注', column: 18 },
+  { key: 'sampleDate', label: '抽检日期', column: 19 },
+];
+
 export function trimCell(value) {
   return String(value ?? '').replace(/\u00A0/g, ' ').trim();
 }
@@ -416,5 +438,5 @@ export function buildAiPlaceholderContext(record, overrides = {}) {
     context[key] = record?.[key] || '';
     context[FIELD_LABELS[key]] = record?.[key] || '';
   });
-  return { ...context, ...overrides };
+  return { ...context, __placeholderEntries: PROMPT_PLACEHOLDERS, ...overrides };
 }
