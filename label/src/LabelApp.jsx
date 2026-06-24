@@ -16,7 +16,6 @@ import {
   Move,
   Plus,
   RefreshCw,
-  RotateCcw,
   Trash2,
   X,
 } from 'lucide-react';
@@ -460,18 +459,8 @@ function findMissingZeroScoreNotes(repos, rubrics, scores, notes) {
   return missing;
 }
 
-function escapeTsvCell(value) {
-  const text = String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  if (!/[\t\n"]/.test(text)) return text;
-  return `"${text.replace(/"/g, '""')}"`;
-}
-
 function buildRawTextWithRubricsCell(parseResult, rubricsText) {
   return buildRawRecordTextWithCell(parseResult, parseResult?.rubricsColumnIndex ?? 3, rubricsText);
-}
-
-function buildTableRowOutput(rubricsText, scoreText, noteText) {
-  return [rubricsText, scoreText, noteText].map(escapeTsvCell).join('\t');
 }
 
 function decodeHtmlText(value) {
@@ -866,10 +855,6 @@ function LabelApp() {
   const finalRubricsText = useMemo(() => buildRubricsText(rubrics), [rubrics]);
   const scoreOutput = useMemo(() => JSON.stringify(normalizeMatrix(repos, rubrics, scores)), [repos, rubrics, scores]);
   const noteOutput = useMemo(() => buildNoteOutput(repos, rubrics, scores, notes), [repos, rubrics, scores, notes]);
-  const tableRowOutput = useMemo(
-    () => buildTableRowOutput(finalRubricsText, scoreOutput, noteOutput),
-    [finalRubricsText, scoreOutput, noteOutput],
-  );
   const hasMissingNoteErrors = Object.keys(missingNoteKeys).length > 0;
   const currentPageIssue = qcIssueMap.get(`page:${selectedRepo}`);
   const otherQcIssue = qcIssueMap.get('other');
@@ -1512,27 +1497,6 @@ function LabelApp() {
         </section>
 
         <section className="review-panel label-panel">
-          <div className="section-head compact">
-            <div>
-              <h2>当前页面标注</h2>
-              <p>{rubrics.length ? `第 ${selectedRepo + 1} 个页面，共 ${rubrics.length} 条 rubric` : '先编写 rubrics'}</p>
-            </div>
-            <div className="button-row">
-              <button className="ghost-button" type="button" onClick={() => copyAndToast(finalRubricsText, '已复制 rubrics')}>
-                <Copy size={16} />
-                复制rubrics
-              </button>
-              <button className="ghost-button" type="button" onClick={() => copyResultAndToast(scoreOutput, '已复制评分')}>
-                <Copy size={16} />
-                复制评分
-              </button>
-              <button className="ghost-button" type="button" onClick={() => copyResultAndToast(noteOutput, '已复制备注')}>
-                <Copy size={16} />
-                复制备注
-              </button>
-            </div>
-          </div>
-
           <div className="review-body">
             <div className="rubric-column">
               <div className="rubric-tool-strip">
@@ -1718,23 +1682,41 @@ function LabelApp() {
                 onPromptModeChange={setPromptPanelMode}
               />
               <section className="flat-output-section label-result-card">
-                <div className="flat-output-head">
-                  <strong>标注输出</strong>
-                  <div className="button-row">
-                    <button className="primary-button" type="button" onClick={() => copyResultAndToast(tableRowOutput, '已按表格格式复制 rubrics / 评分 / 备注')}>
-                      <Copy size={16} />
-                      复制全部
-                    </button>
-                  </div>
-                </div>
                 <div className="output-grid label-output-grid">
-                  <OutputCard title="rubrics" className="nested-output-card">
+                  <OutputCard
+                    title="rubrics"
+                    className="nested-output-card auto-textarea-card label-rubrics-output-card"
+                    actions={
+                      <button className="ghost-button output-copy-button" type="button" onClick={() => copyAndToast(finalRubricsText, '已复制 rubrics')}>
+                        <Copy size={14} />
+                        复制rubrics
+                      </button>
+                    }
+                  >
                     <textarea value={finalRubricsText} readOnly />
                   </OutputCard>
-                  <OutputCard title="评分" className="nested-output-card">
+                  <OutputCard
+                    title="评分"
+                    className="nested-output-card auto-textarea-card label-score-output-card"
+                    actions={
+                      <button className="ghost-button output-copy-button" type="button" onClick={() => copyResultAndToast(scoreOutput, '已复制评分')}>
+                        <Copy size={14} />
+                        复制评分
+                      </button>
+                    }
+                  >
                     <textarea value={scoreOutput} readOnly />
                   </OutputCard>
-                  <OutputCard title="备注" className="nested-output-card output-comment-label">
+                  <OutputCard
+                    title="备注"
+                    className="nested-output-card output-comment-label"
+                    actions={
+                      <button className="ghost-button output-copy-button" type="button" onClick={() => copyResultAndToast(noteOutput, '已复制备注')}>
+                        <Copy size={14} />
+                        复制备注
+                      </button>
+                    }
+                  >
                     <textarea
                       ref={noteOutputRef}
                       className={`output-textarea ${hasMissingNoteErrors ? 'missing-note-output' : ''}`}

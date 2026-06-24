@@ -17,10 +17,41 @@
   --success: #15803d;
   --success-bg: #ecfdf3;
   --shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  --scrollbar-size: 8px;
+  --scrollbar-thumb: rgba(100, 116, 139, 0.42);
+  --scrollbar-thumb-hover: rgba(71, 85, 105, 0.64);
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 42px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 html,
@@ -382,11 +413,8 @@ pre {
 }
 
 .ai-manual-popover {
-  position: absolute;
-  top: 36px;
-  right: 0;
-  z-index: 75;
-  width: max(520px, 100%);
+  position: fixed;
+  z-index: 1200;
   max-width: calc(100vw - 48px);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1107,6 +1135,7 @@ button:active {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
   margin-left: auto;
@@ -1162,7 +1191,10 @@ button:active {
 }
 
 .prompt-side-card {
-  height: clamp(150px, 22vh, 240px);
+  height: clamp(220px, 32vh, 380px);
+  min-height: 190px;
+  max-height: 62vh;
+  resize: vertical;
 }
 
 .note-side-card {
@@ -1204,6 +1236,19 @@ button:active {
   box-shadow: inset 0 0 0 2px rgba(15, 118, 110, 0.14);
 }
 
+.auto-textarea-card {
+  flex: 0 0 auto;
+}
+
+.auto-textarea-card .output-card-body {
+  flex: 0 0 auto;
+}
+
+.auto-textarea-card textarea {
+  height: auto;
+  resize: vertical;
+}
+
 .page-issue-card {
   margin-bottom: 8px;
 }
@@ -1211,6 +1256,21 @@ button:active {
 .page-issue-card textarea {
   min-height: 64px;
   max-height: 110px;
+}
+
+.rubric-page-issue-card {
+  flex: 0 0 auto;
+  margin-bottom: 6px;
+}
+
+.rubric-page-issue-card .pane-title {
+  min-height: 28px;
+  padding: 6px 10px;
+}
+
+.rubric-page-issue-card textarea {
+  min-height: 54px;
+  max-height: none;
 }
 
 .qc-output-card {
@@ -1222,22 +1282,6 @@ button:active {
 
 .flat-output-section {
   min-height: 0;
-}
-
-.flat-output-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex: 0 0 auto;
-  min-height: 34px;
-  margin-bottom: 8px;
-}
-
-.flat-output-head strong {
-  color: #334155;
-  font-size: 13px;
-  font-weight: 900;
 }
 
 .nested-output-card {
@@ -1254,8 +1298,21 @@ button:active {
   padding: 0;
 }
 
+.output-copy-button {
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .label-side-context .prompt-side-card {
-  height: clamp(180px, 30vh, 320px);
+  height: clamp(220px, 34vh, 400px);
+  min-height: 190px;
+  max-height: 62vh;
+  resize: vertical;
 }
 
 .check-toggle {
@@ -1367,7 +1424,7 @@ button:active {
   gap: 8px;
   min-height: 0;
   overflow: auto;
-  padding: 0 2px 8px 0;
+  padding: 0 4px 8px 0;
 }
 
 .rubric-list.ai-thinking-target {
@@ -1627,7 +1684,7 @@ button:active {
   display: grid;
   flex: 1;
   grid-template-columns: 1fr;
-  grid-template-rows: minmax(96px, 0.48fr) auto minmax(160px, 1fr);
+  grid-template-rows: auto auto minmax(160px, 1fr);
   gap: 8px;
   min-height: 0;
   align-items: stretch;
@@ -1656,6 +1713,11 @@ button:active {
   min-height: 0;
   height: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono CJK SC", monospace;
+}
+
+.output-grid .auto-textarea-card textarea {
+  min-height: 74px;
+  height: auto;
 }
 
 .output-grid .score-output-label {

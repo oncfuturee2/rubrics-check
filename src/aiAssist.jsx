@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Plus, Settings, X } from 'lucide-react';
 import { gsap } from 'gsap';
 
 const AI_SETTINGS_KEY = 'rubrics-ai-assist.v1';
+const DEFAULT_ACTIVE_PROFILE_ID = 'openai-compatible';
 
 const DEFAULT_PROFILES = [
   {
@@ -108,13 +109,13 @@ function loadAiSettings() {
     const saved = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || 'null');
     if (!saved) throw new Error('empty');
     return {
-      activeProfileId: saved.activeProfileId || DEFAULT_PROFILES[0].id,
+      activeProfileId: saved.activeProfileId || DEFAULT_ACTIVE_PROFILE_ID,
       profiles: mergeProfiles(saved.profiles),
       prompts: { ...DEFAULT_PROMPTS, ...(saved.prompts || {}) },
     };
   } catch (error) {
     return {
-      activeProfileId: DEFAULT_PROFILES[0].id,
+      activeProfileId: DEFAULT_ACTIVE_PROFILE_ID,
       profiles: DEFAULT_PROFILES,
       prompts: DEFAULT_PROMPTS,
     };
@@ -504,6 +505,7 @@ export function AiAssistField({
   const [settings, setSettings] = useState(loadAiSettings);
   const [menuOpen, setMenuOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  const [manualPopoverStyle, setManualPopoverStyle] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const fieldRef = useRef(null);
@@ -564,6 +566,37 @@ export function AiAssistField({
   useEffect(() => {
     if (settingsOpen) setMenuOpen(false);
   }, [settingsOpen]);
+
+  function getManualPopoverStyle() {
+    const rect = fieldRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
+    const width = Math.min(Math.max(520, rect.width), Math.max(280, viewportWidth - 24));
+    const left = Math.min(Math.max(12, rect.right - width), viewportWidth - width - 12);
+    const top = Math.min(rect.bottom + 6, Math.max(12, viewportHeight - 220));
+    return { left, top, width };
+  }
+
+  useLayoutEffect(() => {
+    if (!manualOpen) {
+      setManualPopoverStyle(null);
+      return undefined;
+    }
+
+    function updateManualPopoverPosition() {
+      const nextStyle = getManualPopoverStyle();
+      if (nextStyle) setManualPopoverStyle(nextStyle);
+    }
+
+    updateManualPopoverPosition();
+    window.addEventListener('resize', updateManualPopoverPosition);
+    window.addEventListener('scroll', updateManualPopoverPosition, true);
+    return () => {
+      window.removeEventListener('resize', updateManualPopoverPosition);
+      window.removeEventListener('scroll', updateManualPopoverPosition, true);
+    };
+  }, [manualOpen]);
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -648,7 +681,9 @@ export function AiAssistField({
           type="button"
           title="手动输入"
           onClick={() => {
-            setManualOpen((open) => !open);
+            const nextOpen = !manualOpen;
+            setManualPopoverStyle(nextOpen ? getManualPopoverStyle() : null);
+            setManualOpen(nextOpen);
             setMenuOpen(false);
           }}
         >
@@ -691,7 +726,7 @@ export function AiAssistField({
       )}
 
       {manualOpen && (
-        <div className="ai-manual-popover">
+        <div className="ai-manual-popover" style={manualPopoverStyle || undefined}>
           <div className="ai-manual-head">
             <strong>手动输入</strong>
             <button className="icon-button" type="button" title="关闭" onClick={() => setManualOpen(false)}>
@@ -757,8 +792,13 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
       const uniqueModels = [...new Set(models)].sort((left, right) => left.localeCompare(right));
       setModelOptions(uniqueModels);
       if (uniqueModels.length) {
-        setModelListMessage(`已获取 ${uniqueModels.length} 个模型`);
-        if (!activeProfile.model) updateActiveProfile({ model: uniqueModels[0] });
+        const nextModel = uniqueModels.includes(activeProfile.model) ? activeProfile.model : uniqueModels[0];
+        updateActiveProfile({ model: nextModel });
+        setModelListMessage(
+          nextModel === activeProfile.model
+            ? `已获取 ${uniqueModels.length} 个模型`
+            : `已获取 ${uniqueModels.length} 个模型，已切换到 ${nextModel}`,
+        );
       } else {
         setModelListMessage('接口没有返回可用模型，请手动填写模型名称');
       }
@@ -887,9 +927,6 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                   <div className="ai-model-input-row">
                     {modelOptions.length ? (
                       <select value={activeProfile.model} onChange={(event) => updateActiveProfile({ model: event.target.value })}>
-                        {!modelOptions.includes(activeProfile.model) && activeProfile.model && (
-                          <option value={activeProfile.model}>{activeProfile.model}</option>
-                        )}
                         {modelOptions.map((model) => (
                           <option key={model} value={model}>
                             {model}
