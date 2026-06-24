@@ -776,6 +776,95 @@ function CombinedFloatingPanel({
   );
 }
 
+function SidePromptNotePanel({
+  panel,
+  prompt,
+  note,
+  currentRepoNote,
+  onPromptModeChange,
+  onNoteModeChange,
+  onBeautifyNoteChange,
+}) {
+  const rawNoteText = panel.noteMode === 'all' ? note : currentRepoNote;
+  const formattedNoteText = panel.beautifyNote ? formatRemarkTree(rawNoteText) : '';
+  const noteText = formattedNoteText || rawNoteText;
+  const emptyNoteText = panel.noteMode === 'all' ? '未解析备注' : '当前repo未解析到备注';
+
+  return (
+    <section className="side-context-stack">
+      <div className="side-context-card prompt-side-card">
+        <div className="pane-title pane-title-with-actions">
+          <span>原始 Prompt</span>
+          <div className="mini-segmented" aria-label="Prompt 显示模式">
+            <button
+              type="button"
+              className={panel.promptMode === 'raw' ? 'active' : ''}
+              onClick={() => onPromptModeChange('raw')}
+            >
+              原格式
+            </button>
+            <button
+              type="button"
+              className={panel.promptMode === 'markdown' ? 'active' : ''}
+              onClick={() => onPromptModeChange('markdown')}
+            >
+              Markdown
+            </button>
+          </div>
+        </div>
+        <div className={`prompt-content ${panel.promptMode === 'markdown' ? 'markdown' : ''}`}>
+          {panel.promptMode === 'markdown' ? renderMarkdownBlocks(prompt) : <pre>{prompt || '未解析 prompt'}</pre>}
+        </div>
+      </div>
+
+      <div className="side-context-card note-side-card">
+        <div className="pane-title pane-title-with-actions">
+          <span>备注</span>
+          <div className="note-toolbar">
+            <label className="mini-toggle">
+              <input
+                type="checkbox"
+                checked={panel.beautifyNote !== false}
+                onChange={(event) => onBeautifyNoteChange(event.target.checked)}
+              />
+              格式美化
+            </label>
+            <div className="mini-segmented">
+              <button
+                type="button"
+                className={panel.noteMode === 'all' ? 'active' : ''}
+                onClick={() => onNoteModeChange('all')}
+              >
+                全部备注
+              </button>
+              <button
+                type="button"
+                className={panel.noteMode !== 'all' ? 'active' : ''}
+                onClick={() => onNoteModeChange('current')}
+              >
+                当前repo备注
+              </button>
+            </div>
+          </div>
+        </div>
+        <pre>{noteText || emptyNoteText}</pre>
+      </div>
+    </section>
+  );
+}
+
+function OutputCard({ title, actions, className = '', children }) {
+  return (
+    <section className={`side-context-card output-card ${className}`}>
+      <div className="pane-title pane-title-with-actions">
+        <span>{title}</span>
+        {actions}
+      </div>
+      <div className="output-card-body">{children}</div>
+    </section>
+  );
+}
+
 function AnimatedIssueTextarea({ className, value, onChange, placeholder }) {
   return (
     <div className="issue-textarea-wrap">
@@ -1536,49 +1625,52 @@ function App() {
               </div>
 
                 <section className="output-panel">
-                  <label className="stacked-label side-top-field">
-                    页面整体问题
+                  <SidePromptNotePanel
+                    panel={floatingPanel}
+                    prompt={data.prompt}
+                    note={data.note}
+                    currentRepoNote={currentRepoNote}
+                    onPromptModeChange={setPromptMode}
+                    onNoteModeChange={setNoteMode}
+                    onBeautifyNoteChange={setBeautifyNote}
+                  />
+                  <OutputCard title="页面整体问题" className="page-issue-card">
                     <textarea
                       value={currentPage.pageNote}
                       onChange={(event) => updatePage(selectedRepo, { pageNote: event.target.value })}
                       placeholder="记录当前页面的整体异常，例如无法打开、白屏、核心交互不可用"
                     />
-                  </label>
-                  <div className="section-head">
-                    <div>
-                      <h2>质检输出</h2>
-                      <p>输出区固定在右侧</p>
+                  </OutputCard>
+                  <section className="flat-output-section qc-output-card">
+                    <div className="flat-output-head">
+                      <strong>质检输出</strong>
+                      <div className="button-row">
+                        <button className="primary-button" type="button" onClick={() => copyAndToast(generatedComment, '已复制质检评论')}>
+                          <Copy size={16} />
+                          复制评论
+                        </button>
+                        <button className="ghost-button" type="button" onClick={() => copyAndToast(updatedMatrixText, '已复制评分矩阵')}>
+                          <Copy size={16} />
+                          复制评分
+                        </button>
+                      </div>
                     </div>
-                    <div className="button-row">
-                      <button className="primary-button" type="button" onClick={() => copyAndToast(generatedComment, '已复制质检评论')}>
-                        <Copy size={16} />
-                        复制评论
-                      </button>
-                      <button className="ghost-button" type="button" onClick={() => copyAndToast(updatedMatrixText, '已复制评分矩阵')}>
-                        <Copy size={16} />
-                        复制评分
-                      </button>
+                    <div className="output-grid">
+                      <OutputCard title="其它质检问题" className="nested-output-card">
+                        <textarea
+                          value={review.finalNote}
+                          onChange={(event) => setReview((previous) => ({ ...previous, finalNote: event.target.value }))}
+                          placeholder="逐行记录无法归入具体页面或具体 rubric 的问题"
+                        />
+                      </OutputCard>
+                      <OutputCard title="修正后评分" className="nested-output-card score-output-label">
+                        <textarea value={updatedMatrixText} readOnly />
+                      </OutputCard>
+                      <OutputCard title="质检评论输出" className="nested-output-card output-comment-label">
+                        <textarea className="output-textarea" value={generatedComment} readOnly />
+                      </OutputCard>
                     </div>
-                  </div>
-
-                  <div className="output-grid">
-                    <label className="stacked-label">
-                      其它质检问题
-                      <textarea
-                        value={review.finalNote}
-                        onChange={(event) => setReview((previous) => ({ ...previous, finalNote: event.target.value }))}
-                        placeholder="逐行记录无法归入具体页面或具体 rubric 的问题"
-                      />
-                    </label>
-                    <label className="stacked-label">
-                      修正后评分
-                      <textarea value={updatedMatrixText} readOnly />
-                    </label>
-                    <label className="stacked-label output-comment-label">
-                      质检评论输出
-                      <textarea className="output-textarea" value={generatedComment} readOnly />
-                    </label>
-                  </div>
+                  </section>
                 </section>
               </div>
             </>
@@ -1588,20 +1680,6 @@ function App() {
         </section>
       </main>
 
-      <CombinedFloatingPanel
-        panel={floatingPanel}
-        prompt={data.prompt}
-        note={data.note}
-        currentRepoNote={currentRepoNote}
-        onDragStart={startFloatingDrag}
-        onSplitStart={startSplitDrag}
-        onResizeStart={startResizeDrag}
-        onToggleMinimize={toggleFloatingPanel}
-        onPromptModeChange={setPromptMode}
-        onNoteModeChange={setNoteMode}
-        onBeautifyNoteChange={setBeautifyNote}
-      />
-
       {rubricsFormatModal && (
         <RubricsFormatModal
           value={rubricsFormatModal.draft}
@@ -1610,8 +1688,6 @@ function App() {
           onConfirm={applyRubricsFormatFix}
         />
       )}
-
-      {panelInteraction && <div className="drag-interaction-shield" />}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

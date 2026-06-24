@@ -789,6 +789,49 @@ function PromptFloatingPanel({
   );
 }
 
+function SidePromptPanel({ panel, prompt, onPromptModeChange }) {
+  return (
+    <section className="side-context-stack label-side-context">
+      <div className="side-context-card prompt-side-card">
+        <div className="pane-title pane-title-with-actions">
+          <span>原始 Prompt</span>
+          <div className="mini-segmented">
+            <button
+              className={panel.promptMode === 'markdown' ? 'active' : ''}
+              type="button"
+              onClick={() => onPromptModeChange('markdown')}
+            >
+              Markdown
+            </button>
+            <button
+              className={panel.promptMode === 'raw' ? 'active' : ''}
+              type="button"
+              onClick={() => onPromptModeChange('raw')}
+            >
+              原格式
+            </button>
+          </div>
+        </div>
+        <div className={`prompt-content ${panel.promptMode === 'markdown' ? 'markdown' : ''}`}>
+          {panel.promptMode === 'markdown' ? renderMarkdownBlocks(prompt) : <pre>{prompt || '未解析 prompt'}</pre>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function OutputCard({ title, actions, className = '', children }) {
+  return (
+    <section className={`side-context-card output-card ${className}`}>
+      <div className="pane-title pane-title-with-actions">
+        <span>{title}</span>
+        {actions}
+      </div>
+      <div className="output-card-body">{children}</div>
+    </section>
+  );
+}
+
 function LabelApp() {
   const [rawText, setRawText] = useState('');
   const [data, setData] = useState(EMPTY_DATA);
@@ -1503,6 +1546,7 @@ function LabelApp() {
                   placeholder="在这里编写或粘贴标准 rubrics，下面卡片会同步更新"
                   manualPlaceholder="手动输入或粘贴 Rubrics"
                   disabled={!data.prompt?.trim()}
+                  aiDisabled
                   onStatus={setToast}
                 />
               </div>
@@ -1668,51 +1712,42 @@ function LabelApp() {
             </div>
 
             <section className="output-panel label-output-panel">
-              <div className="section-head">
-                <div>
-                  <h2>标注输出</h2>
-                  <p>复制标准格式数据</p>
+              <SidePromptPanel
+                panel={promptPanel}
+                prompt={data.prompt}
+                onPromptModeChange={setPromptPanelMode}
+              />
+              <section className="flat-output-section label-result-card">
+                <div className="flat-output-head">
+                  <strong>标注输出</strong>
+                  <div className="button-row">
+                    <button className="primary-button" type="button" onClick={() => copyResultAndToast(tableRowOutput, '已按表格格式复制 rubrics / 评分 / 备注')}>
+                      <Copy size={16} />
+                      复制全部
+                    </button>
+                  </div>
                 </div>
-                <div className="button-row">
-                  <button className="primary-button" type="button" onClick={() => copyResultAndToast(tableRowOutput, '已按表格格式复制 rubrics / 评分 / 备注')}>
-                    <Copy size={16} />
-                    复制全部
-                  </button>
+                <div className="output-grid label-output-grid">
+                  <OutputCard title="rubrics" className="nested-output-card">
+                    <textarea value={finalRubricsText} readOnly />
+                  </OutputCard>
+                  <OutputCard title="评分" className="nested-output-card">
+                    <textarea value={scoreOutput} readOnly />
+                  </OutputCard>
+                  <OutputCard title="备注" className="nested-output-card output-comment-label">
+                    <textarea
+                      ref={noteOutputRef}
+                      className={`output-textarea ${hasMissingNoteErrors ? 'missing-note-output' : ''}`}
+                      value={noteOutput}
+                      readOnly
+                    />
+                  </OutputCard>
                 </div>
-              </div>
-
-              <div className="output-grid label-output-grid">
-                <label className="stacked-label">
-                  rubrics
-                  <textarea value={finalRubricsText} readOnly />
-                </label>
-                <label className="stacked-label">
-                  评分
-                  <textarea value={scoreOutput} readOnly />
-                </label>
-                <label className="stacked-label output-comment-label">
-                  备注
-                  <textarea
-                    ref={noteOutputRef}
-                    className={`output-textarea ${hasMissingNoteErrors ? 'missing-note-output' : ''}`}
-                    value={noteOutput}
-                    readOnly
-                  />
-                </label>
-              </div>
+              </section>
             </section>
           </div>
         </section>
       </main>
-
-      <PromptFloatingPanel
-        panel={promptPanel}
-        prompt={data.prompt}
-        onDragStart={startPromptPanelDrag}
-        onResizeStart={startPromptPanelResize}
-        onToggleMinimize={togglePromptPanel}
-        onPromptModeChange={setPromptPanelMode}
-      />
 
       {rubricsFormatModal && (
         <RubricsFormatModal
@@ -1722,8 +1757,6 @@ function LabelApp() {
           onConfirm={applyRubricsFormatFix}
         />
       )}
-
-      {promptPanelInteraction && <div className="drag-interaction-shield" />}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

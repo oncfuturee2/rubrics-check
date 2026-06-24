@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Plus, Settings, X } from 'lucide-react';
+import { gsap } from 'gsap';
 
 const AI_SETTINGS_KEY = 'rubrics-ai-assist.v1';
 
@@ -147,6 +148,54 @@ function normalizeBaseUrl(baseUrl) {
   return String(baseUrl || '').replace(/\/+$/, '');
 }
 
+function resolveOpenAiChatUrl(baseUrl) {
+  const url = normalizeBaseUrl(baseUrl);
+  if (/\/chat\/completions$/i.test(url)) return url;
+  if (/\/v1$/i.test(url)) return `${url}/chat/completions`;
+  if (/\/(compatible-mode|paas)$/i.test(url)) return `${url}/v1/chat/completions`;
+  if (/\/responses$/i.test(url)) return `${url.replace(/\/responses$/i, '')}/chat/completions`;
+  return `${url}/v1/chat/completions`;
+}
+
+function resolveOpenAiResponsesUrl(baseUrl) {
+  const url = normalizeBaseUrl(baseUrl);
+  if (/\/responses$/i.test(url)) return url;
+  if (/\/chat\/completions$/i.test(url)) return `${url.replace(/\/chat\/completions$/i, '')}/responses`;
+  if (/\/v1$/i.test(url)) return `${url}/responses`;
+  return `${url}/v1/responses`;
+}
+
+function resolveOpenAiModelUrls(baseUrl) {
+  const url = normalizeBaseUrl(baseUrl);
+  if (/\/models$/i.test(url)) return [url];
+
+  if (/\/chat\/completions$/i.test(url)) {
+    const root = url.replace(/\/chat\/completions$/i, '');
+    return [`${root}/v1/models`, `${root}/models`];
+  }
+
+  if (/\/responses$/i.test(url)) {
+    const root = url.replace(/\/responses$/i, '');
+    return [`${root}/models`, `${root.replace(/\/v1$/i, '')}/v1/models`];
+  }
+
+  if (/\/v1$/i.test(url)) return [`${url}/models`];
+  if (/\/(compatible-mode|paas)$/i.test(url)) return [`${url}/v1/models`];
+  return [`${url}/v1/models`, `${url}/models`];
+}
+
+async function getFirstJson(urls, headers = {}) {
+  let lastError = null;
+  for (const url of urls) {
+    try {
+      return await getJson(url, headers);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('request failed');
+}
+
 function authHeaders(profile) {
   if (!profile.apiKey) return {};
   if (profile.mode === 'anthropic') return { 'x-api-key': profile.apiKey };
@@ -181,6 +230,70 @@ function extractTextFromResponse(mode, payload) {
   }
 
   return '';
+}
+
+function stripReasoningText(value) {
+  return String(value || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    .replace(/^<think>[\s\S]*?(?=(?:^|\n)\s*[-*]?\s*(?:第\s*\d+\s*条\s*rubrics?\s*->|合格\b))/im, '')
+    .replace(/^\s*(?:思考过程|推理过程|analysis|reasoning)\s*[:：][\s\S]*?(?=(?:^|\n)\s*[-*]?\s*(?:第\s*\d+\s*条\s*rubrics?\s*->|合格\b))/im, '')
+    .trim();
+}
+
+function normalizePrecheckOutput(value) {
+  const cleaned = stripReasoningText(value)
+    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```/g, '').trim())
+    .trim();
+
+  if (!cleaned) return '';
+  if (/^[-*\s]*合格[。.!！\s]*$/i.test(cleaned)) return '合格';
+
+  const lines = cleaned
+    .split(/\r?\n/)
+    .flatMap((line) => line.split(/(?=第\s*\d+\s*条\s*rubrics?\s*->)/i))
+    .map((line) => line.trim().replace(/^[-*]\s*/, '').replace(/^[\d一二三四五六七八九十]+\s*[.、)]\s*/, ''))
+    .filter(Boolean);
+
+  const validLines = [];
+  lines.forEach((line) => {
+    const match = line.match(/^第\s*(\d+)\s*条\s*rubrics?\s*->\s*(.+)$/i);
+    if (!match) return;
+    const reason = match[2]
+      .replace(/<\/?think>/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!reason) return;
+    validLines.push(`- 第${Number(match[1])}条rubrics -> ${reason}`);
+  });
+
+  if (validLines.length) return validLines.join('\n');
+  if (/合格/.test(cleaned) && !/第\s*\d+\s*条\s*rubrics?/i.test(cleaned)) return '合格';
+  return '';
+}
+
+function normalizeGenerateOutput(value) {
+  return stripReasoningText(value);
+}
+
+function normalizeAiOutput(type, value) {
+  if (type === 'precheck') return normalizePrecheckOutput(value);
+  if (type === 'generate') return normalizeGenerateOutput(value);
+  return stripReasoningText(value);
+}
+
+function addOutputGuard(type, promptText) {
+  if (type !== 'precheck') return promptText;
+  return [
+    promptText,
+    '',
+    '## 输出格式硬性规则',
+    '你必须只输出下面两种格式之一，不允许输出任何解释、分析、思考过程、Markdown 标题、代码块或 <think> 标签：',
+    '1. 如果没有问题，只输出：合格',
+    '2. 如果有问题，只输出 Markdown 无序列表，每行严格使用：- 第n条rubrics -> 问题描述',
+    '错误示例：<think>...</think>、I am reviewing...、**Identifying issue**、总结段落。',
+  ].join('\n');
 }
 
 async function postJson(url, headers, body) {
@@ -261,7 +374,10 @@ async function fetchModelList(profile) {
     );
   }
 
-  return extractModelsFromPayload(profile.mode, await getJson(`${baseUrl}/models`, authHeaders(profile)));
+  return extractModelsFromPayload(
+    profile.mode,
+    await getFirstJson(resolveOpenAiModelUrls(baseUrl), authHeaders(profile)),
+  );
 }
 
 async function requestAi(profile, promptText, modeName) {
@@ -278,7 +394,7 @@ async function requestAi(profile, promptText, modeName) {
 
   if (profile.mode === 'openai-responses') {
     const payload = await postJson(
-      `${baseUrl}/responses`,
+      resolveOpenAiResponsesUrl(baseUrl),
       authHeaders(profile),
       {
         model: profile.model,
@@ -295,7 +411,7 @@ async function requestAi(profile, promptText, modeName) {
 
   if (profile.mode === 'openai-chat') {
     const payload = await postJson(
-      `${baseUrl}/chat/completions`,
+      resolveOpenAiChatUrl(baseUrl),
       authHeaders(profile),
       {
         model: profile.model,
@@ -381,6 +497,7 @@ export function AiAssistField({
   placeholder,
   manualPlaceholder,
   disabled = false,
+  aiDisabled = false,
   onStatus,
   promptTemplate,
 }) {
@@ -402,6 +519,47 @@ export function AiAssistField({
   useEffect(() => {
     saveAiSettings(settings);
   }, [settings]);
+
+  useEffect(() => {
+    const target = fieldRef.current?.closest('.rubric-column')?.querySelector('.rubric-list');
+    if (!target) return undefined;
+
+    if (!running) {
+      target.classList.remove('ai-thinking-target');
+      gsap.killTweensOf(target);
+      gsap.set(target, { clearProps: '--ai-border-angle,--ai-border-glow,--ai-border-opacity' });
+      return undefined;
+    }
+
+    target.classList.add('ai-thinking-target');
+    gsap.set(target, {
+      '--ai-border-angle': '0deg',
+      '--ai-border-glow': 0.45,
+      '--ai-border-opacity': 0.9,
+    });
+
+    const spin = gsap.to(target, {
+      '--ai-border-angle': '360deg',
+      duration: 2.2,
+      ease: 'none',
+      repeat: -1,
+    });
+    const pulse = gsap.to(target, {
+      '--ai-border-glow': 1,
+      '--ai-border-opacity': 1,
+      duration: 0.85,
+      ease: 'sine.inOut',
+      yoyo: true,
+      repeat: -1,
+    });
+
+    return () => {
+      spin.kill();
+      pulse.kill();
+      target.classList.remove('ai-thinking-target');
+      gsap.set(target, { clearProps: '--ai-border-angle,--ai-border-glow,--ai-border-opacity' });
+    };
+  }, [running]);
 
   useEffect(() => {
     if (settingsOpen) setMenuOpen(false);
@@ -441,9 +599,9 @@ export function AiAssistField({
   }
 
   async function runAi() {
-    if (disabled || running) return;
+    if (disabled || aiDisabled || running) return;
     const template = promptTemplate?.template ?? settings.prompts[type] ?? DEFAULT_PROMPTS[type];
-    const promptText = fillTemplate(template, context);
+    const promptText = addOutputGuard(type, fillTemplate(template, context));
     if (!promptText.trim()) {
       onStatus?.('没有可发送给 AI 的内容。');
       return;
@@ -452,7 +610,7 @@ export function AiAssistField({
     setRunning(true);
     onStatus?.('AI 正在处理...');
     try {
-      const result = (await requestAi(activeProfile, promptText, type)).trim();
+      const result = normalizeAiOutput(type, await requestAi(activeProfile, promptText, type)).trim();
       if (!result) throw new Error('模型没有返回内容');
       onChange(result);
       onStatus?.('AI 结果已填入输入框。');
@@ -467,7 +625,7 @@ export function AiAssistField({
     <div className="stacked-label ai-assist-field" ref={fieldRef}>
       <div className="ai-field-head">
         <div className="ai-action-group">
-          <button className="ai-main-button" type="button" onClick={runAi} disabled={disabled || running}>
+          <button className="ai-main-button" type="button" onClick={runAi} disabled={disabled || aiDisabled || running}>
             <AiLineIcon size={16} />
             {running ? 'AI处理中' : title}
           </button>

@@ -165,12 +165,19 @@
   gap: 6px;
 }
 
-.label-output-grid > .stacked-label {
-  gap: 4px;
-}
-
 .label-output-grid textarea {
   font-size: 12px;
+}
+
+.label-output-grid > .output-card {
+  min-height: 0;
+}
+
+.label-result-card {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .label-app textarea.missing-note-input,
@@ -201,6 +208,14 @@
 
 .label-output-panel .section-head {
   margin-bottom: 4px;
+}
+
+.label-output-panel .side-context-stack {
+  margin-bottom: 8px;
+}
+
+.label-output-panel .prompt-side-card {
+  height: clamp(160px, 26vh, 280px);
 }
 
 .prompt-floating-panel {

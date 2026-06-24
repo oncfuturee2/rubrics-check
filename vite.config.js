@@ -100,15 +100,27 @@ function pageTitleMiddleware() {
         }
       });
 
-      server.middlewares.use('/api/ai/proxy', async (request, response) => {
-        if (request.method === 'OPTIONS') {
+      server.middlewares.use(async (request, response, next) => {
+        const requestPath = new URL(request.url || '/', 'http://localhost').pathname;
+        if (requestPath !== '/api/ai/proxy') {
+          next();
+          return;
+        }
+
+        const requestMethod = String(request.method || '').toUpperCase();
+        response.setHeader('Access-Control-Allow-Origin', '*');
+        response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+        response.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, x-api-key, anthropic-version');
+
+        if (requestMethod === 'OPTIONS') {
           response.statusCode = 204;
           response.end();
           return;
         }
 
-        if (request.method !== 'POST') {
+        if (requestMethod !== 'POST') {
           response.statusCode = 405;
+          response.setHeader('content-type', 'application/json; charset=utf-8');
           response.end(JSON.stringify({ error: 'method not allowed' }));
           return;
         }
