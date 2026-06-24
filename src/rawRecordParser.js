@@ -346,6 +346,18 @@ function buildDynamicData(row, analysis) {
   return data;
 }
 
+function buildTwoColumnData(row, analysis) {
+  const repoIndex = analysis.repoIndex ?? 1;
+  const promptIndex = repoIndex === 0 ? 1 : 0;
+  const data = {
+    ...EMPTY_RAW_RECORD,
+    prompt: getCell(row, promptIndex),
+    repo: getCell(row, repoIndex),
+  };
+  data.variables = buildVariables(row, data);
+  return data;
+}
+
 function scoreCandidate(row, allowTwoColumns) {
   const analysis = analyzeRow(row);
   const simpleTwoScore = allowTwoColumns && row.length >= 2 ? 1 : 0;
@@ -395,7 +407,7 @@ export function parseRawRecord(rawText, { allowTwoColumns = false } = {}) {
   const { row, delimiterName } = chooseBestRow(rawText, allowTwoColumns);
   const analysis = analyzeRow(row);
   const type = inferRecordType(row, analysis, allowTwoColumns);
-  const data = type === 'invalid' ? EMPTY_RAW_RECORD : buildDynamicData(row, analysis);
+  const data = type === 'invalid' ? EMPTY_RAW_RECORD : type === 'two' ? buildTwoColumnData(row, analysis) : buildDynamicData(row, analysis);
   const ok = type !== 'invalid';
 
   return {
@@ -405,8 +417,8 @@ export function parseRawRecord(rawText, { allowTwoColumns = false } = {}) {
     displayName: displayNameForType(type, row.length),
     row: type === 'full' ? padRow(row, Math.max(row.length, FULL_RECORD_COLUMN_COUNT)) : row,
     data,
-    rubricsColumnIndex: analysis.rubricsIndex,
-    scoreColumnIndex: analysis.scoreIndex,
+    rubricsColumnIndex: type === 'two' ? null : analysis.rubricsIndex,
+    scoreColumnIndex: type === 'two' ? null : analysis.scoreIndex,
     repoColumnIndex: analysis.repoIndex,
     errors: ok
       ? []
