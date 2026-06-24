@@ -1,0 +1,665 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, Plus, Settings, X } from 'lucide-react';
+
+const AI_SETTINGS_KEY = 'rubrics-ai-assist.v1';
+
+const DEFAULT_PROFILES = [
+  {
+    id: 'openai-responses',
+    name: 'OpenAI Responses',
+    mode: 'openai-responses',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4.1-mini',
+    apiKey: '',
+    temperature: 0.2,
+    maxTokens: 1800,
+  },
+  {
+    id: 'openai-compatible',
+    name: 'OpenAI兼容',
+    mode: 'openai-chat',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+    apiKey: '',
+    temperature: 0.2,
+    maxTokens: 1800,
+  },
+  {
+    id: 'anthropic',
+    name: 'Anthropic',
+    mode: 'anthropic',
+    baseUrl: 'https://api.anthropic.com/v1',
+    model: 'claude-3-5-sonnet-latest',
+    apiKey: '',
+    temperature: 0.2,
+    maxTokens: 1800,
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini',
+    mode: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    model: 'gemini-2.0-flash',
+    apiKey: '',
+    temperature: 0.2,
+    maxTokens: 1800,
+  },
+  {
+    id: 'ollama',
+    name: 'Ollama本地',
+    mode: 'ollama',
+    baseUrl: 'http://localhost:11434',
+    model: 'qwen2.5:7b',
+    apiKey: '',
+    temperature: 0.2,
+    maxTokens: 1800,
+  },
+];
+
+const DEFAULT_PROMPTS = {
+  precheck: [
+    '你是严谨的 Rubrics 质检助手。请根据 prompt 检查 rubrics 是否符合任务要求和评分标准。',
+    '只输出需要修改的问题；如果没有问题，只输出“合格”。',
+    '输出格式必须为 Markdown 无序列表，具体到条目时使用：',
+    '- 第n条rubrics -> 问题描述',
+    '',
+    'prompt:',
+    '```',
+    '&{prompt}',
+    '```',
+    '',
+    'rubrics:',
+    '```',
+    '&{rubrics}',
+    '```',
+  ].join('\n'),
+  generate: [
+    '你是专业的前端游戏/网页标注员。请根据 prompt 预生成可评分的 Rubrics。',
+    '要求：',
+    '- 每条 rubric 只检查一件明确可验证的事情',
+    '- 不写“美观、友好、流畅”等主观项',
+    '- 覆盖 prompt 的核心玩法、交互、视觉、语言、技术框架等明确要求',
+    '- 输出 4 到 10 条',
+    '- 只输出编号列表，格式为：1. xxx',
+    '',
+    'prompt:',
+    '```',
+    '&{prompt}',
+    '```',
+  ].join('\n'),
+};
+
+const MODE_LABELS = {
+  'openai-responses': 'OpenAI Responses',
+  'openai-chat': 'OpenAI兼容 Chat',
+  anthropic: 'Anthropic Messages',
+  gemini: 'Gemini',
+  ollama: 'Ollama Chat',
+};
+
+function mergeProfiles(profiles) {
+  const saved = Array.isArray(profiles) ? profiles : [];
+  return DEFAULT_PROFILES.map((profile) => ({ ...profile, ...(saved.find((item) => item.id === profile.id) || {}) }));
+}
+
+function loadAiSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || 'null');
+    if (!saved) throw new Error('empty');
+    return {
+      activeProfileId: saved.activeProfileId || DEFAULT_PROFILES[0].id,
+      profiles: mergeProfiles(saved.profiles),
+      prompts: { ...DEFAULT_PROMPTS, ...(saved.prompts || {}) },
+    };
+  } catch (error) {
+    return {
+      activeProfileId: DEFAULT_PROFILES[0].id,
+      profiles: DEFAULT_PROFILES,
+      prompts: DEFAULT_PROMPTS,
+    };
+  }
+}
+
+function saveAiSettings(settings) {
+  localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function fillTemplate(template, context) {
+  return String(template || '').replace(/&\{([^}]+)\}/g, (_, key) => String(context?.[key] ?? ''));
+}
+
+function buildPlaceholderEntries(context) {
+  return Object.keys(context || {})
+    .filter((key) => key && !key.startsWith('__') && typeof context[key] !== 'function')
+    .map((key) => ({ key, token: `&{${key}}` }));
+}
+
+function normalizeBaseUrl(baseUrl) {
+  return String(baseUrl || '').replace(/\/+$/, '');
+}
+
+function authHeaders(profile) {
+  if (!profile.apiKey) return {};
+  if (profile.mode === 'anthropic') return { 'x-api-key': profile.apiKey };
+  return { Authorization: `Bearer ${profile.apiKey}` };
+}
+
+function extractTextFromResponse(mode, payload) {
+  if (mode === 'openai-responses') {
+    if (payload.output_text) return payload.output_text;
+    return (payload.output || [])
+      .flatMap((item) => item.content || [])
+      .map((item) => item.text || '')
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+
+  if (mode === 'openai-chat') {
+    return payload.choices?.[0]?.message?.content || '';
+  }
+
+  if (mode === 'anthropic') {
+    return (payload.content || []).map((item) => item.text || '').join('\n').trim();
+  }
+
+  if (mode === 'gemini') {
+    return (payload.candidates?.[0]?.content?.parts || []).map((item) => item.text || '').join('\n').trim();
+  }
+
+  if (mode === 'ollama') {
+    return payload.message?.content || payload.response || '';
+  }
+
+  return '';
+}
+
+async function postJson(url, headers, body) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch (error) {
+    payload = { raw: text };
+  }
+
+  if (!response.ok) {
+    const message = payload?.error?.message || payload?.message || text || `HTTP ${response.status}`;
+    throw new Error(message);
+  }
+
+  return payload;
+}
+
+async function requestAi(profile, promptText, modeName) {
+  const baseUrl = normalizeBaseUrl(profile.baseUrl);
+  const maxTokens = Number(profile.maxTokens) || 1800;
+  const temperature = Number(profile.temperature) || 0.2;
+  const system = modeName === 'generate'
+    ? '你是专业的 Rubrics 标注助手。'
+    : '你是专业的 Rubrics 质检助手。';
+
+  if (!baseUrl) throw new Error('请先配置 Base URL');
+  if (profile.mode !== 'ollama' && !profile.apiKey) throw new Error('请先配置 API Key');
+  if (!profile.model) throw new Error('请先配置模型名称');
+
+  if (profile.mode === 'openai-responses') {
+    const payload = await postJson(
+      `${baseUrl}/responses`,
+      authHeaders(profile),
+      {
+        model: profile.model,
+        temperature,
+        max_output_tokens: maxTokens,
+        input: [
+          { role: 'system', content: [{ type: 'input_text', text: system }] },
+          { role: 'user', content: [{ type: 'input_text', text: promptText }] },
+        ],
+      },
+    );
+    return extractTextFromResponse(profile.mode, payload);
+  }
+
+  if (profile.mode === 'openai-chat') {
+    const payload = await postJson(
+      `${baseUrl}/chat/completions`,
+      authHeaders(profile),
+      {
+        model: profile.model,
+        temperature,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: promptText },
+        ],
+      },
+    );
+    return extractTextFromResponse(profile.mode, payload);
+  }
+
+  if (profile.mode === 'anthropic') {
+    const payload = await postJson(
+      `${baseUrl}/messages`,
+      {
+        ...authHeaders(profile),
+        'anthropic-version': '2023-06-01',
+      },
+      {
+        model: profile.model,
+        system,
+        temperature,
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: promptText }],
+      },
+    );
+    return extractTextFromResponse(profile.mode, payload);
+  }
+
+  if (profile.mode === 'gemini') {
+    const keyParam = profile.apiKey ? `?key=${encodeURIComponent(profile.apiKey)}` : '';
+    const payload = await postJson(
+      `${baseUrl}/models/${encodeURIComponent(profile.model)}:generateContent${keyParam}`,
+      {},
+      {
+        contents: [{ role: 'user', parts: [{ text: `${system}\n\n${promptText}` }] }],
+        generationConfig: { temperature, maxOutputTokens: maxTokens },
+      },
+    );
+    return extractTextFromResponse(profile.mode, payload);
+  }
+
+  if (profile.mode === 'ollama') {
+    const payload = await postJson(
+      `${baseUrl}/api/chat`,
+      {},
+      {
+        model: profile.model,
+        stream: false,
+        options: { temperature, num_predict: maxTokens },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: promptText },
+        ],
+      },
+    );
+    return extractTextFromResponse(profile.mode, payload);
+  }
+
+  throw new Error('不支持的接口模式');
+}
+
+function AiLineIcon({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <g fill="none">
+        <path d="m12.594 23.258l-.012.002l-.071.035l-.02.004l-.014-.004l-.071-.036q-.016-.004-.024.006l-.004.01l-.017.428l.005.02l.01.013l.104.074l.015.004l.012-.004l.104-.074l.012-.016l.004-.017l-.017-.427q-.004-.016-.016-.018m.264-.113l-.014.002l-.184.093l-.01.01l-.003.011l.018.43l.005.012l.008.008l.201.092q.019.005.029-.008l.004-.014l-.034-.614q-.005-.019-.02-.022m-.715.002a.02.02 0 0 0-.027.006l-.006.014l-.034.614q.001.018.017.024l.015-.002l.201-.093l.01-.008l.003-.011l.018-.43l-.003-.012l-.01-.01z" />
+        <path fill="currentColor" d="M9.107 5.448c.598-1.75 3.016-1.803 3.725-.159l.06.16l.807 2.36a4 4 0 0 0 2.276 2.411l.217.081l2.36.806c1.75.598 1.803 3.016.16 3.725l-.16.06l-2.36.807a4 4 0 0 0-2.412 2.276l-.081.216l-.806 2.361c-.598 1.75-3.016 1.803-3.724.16l-.062-.16l-.806-2.36a4 4 0 0 0-2.276-2.412l-.216-.081l-2.36-.806c-1.751-.598-1.804-3.016-.16-3.724l.16-.062l2.36-.806A4 4 0 0 0 8.22 8.025l.081-.216zM11 6.094l-.806 2.36a6 6 0 0 1-3.49 3.649l-.25.091l-2.36.806l2.36.806a6 6 0 0 1 3.649 3.49l.091.25l.806 2.36l.806-2.36a6 6 0 0 1 3.49-3.649l.25-.09l2.36-.807l-2.36-.806a6 6 0 0 1-3.649-3.49l-.09-.25zM19 2a1 1 0 0 1 .898.56l.048.117l.35 1.026l1.027.35a1 1 0 0 1 .118 1.845l-.118.048l-1.026.35l-.35 1.027a1 1 0 0 1-1.845.117l-.048-.117l-.35-1.026l-1.027-.35a1 1 0 0 1-.118-1.845l.118-.048l1.026-.35l.35-1.027A1 1 0 0 1 19 2" />
+      </g>
+    </svg>
+  );
+}
+
+export function AiAssistField({
+  type,
+  title,
+  value,
+  onChange,
+  context,
+  placeholder,
+  manualPlaceholder,
+  disabled = false,
+  onStatus,
+}) {
+  const [settings, setSettings] = useState(loadAiSettings);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [running, setRunning] = useState(false);
+  const fieldRef = useRef(null);
+
+  const activeProfile = useMemo(
+    () => {
+      const profiles = settings.profiles?.length ? settings.profiles : DEFAULT_PROFILES;
+      return profiles.find((profile) => profile.id === settings.activeProfileId) || profiles[0];
+    },
+    [settings],
+  );
+
+  useEffect(() => {
+    saveAiSettings(settings);
+  }, [settings]);
+
+  useEffect(() => {
+    if (settingsOpen) setMenuOpen(false);
+  }, [settingsOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+
+    function closeOnOutsidePointer(event) {
+      if (fieldRef.current?.contains(event.target)) return;
+      setMenuOpen(false);
+    }
+
+    function closeOnFocus(event) {
+      if (fieldRef.current?.contains(event.target)) return;
+      setMenuOpen(false);
+    }
+
+    document.addEventListener('pointerdown', closeOnOutsidePointer, true);
+    document.addEventListener('focusin', closeOnFocus, true);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer, true);
+      document.removeEventListener('focusin', closeOnFocus, true);
+    };
+  }, [menuOpen]);
+
+  function updateSettings(nextSettings) {
+    setSettings({
+      ...nextSettings,
+      profiles: nextSettings.profiles?.length ? nextSettings.profiles : DEFAULT_PROFILES,
+    });
+  }
+
+  function selectProfile(profileId) {
+    setSettings((previous) => ({ ...previous, activeProfileId: profileId }));
+    setMenuOpen(false);
+  }
+
+  async function runAi() {
+    if (disabled || running) return;
+    const template = settings.prompts[type] || DEFAULT_PROMPTS[type];
+    const promptText = fillTemplate(template, context);
+    if (!promptText.trim()) {
+      onStatus?.('没有可发送给 AI 的内容。');
+      return;
+    }
+
+    setRunning(true);
+    onStatus?.('AI 正在处理...');
+    try {
+      const result = (await requestAi(activeProfile, promptText, type)).trim();
+      if (!result) throw new Error('模型没有返回内容');
+      onChange(result);
+      onStatus?.('AI 结果已填入输入框。');
+    } catch (error) {
+      onStatus?.(`AI 请求失败：${String(error.message || error)}`);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="stacked-label ai-assist-field" ref={fieldRef}>
+      <div className="ai-field-head">
+        <div className="ai-action-group">
+          <button className="ai-main-button" type="button" onClick={runAi} disabled={disabled || running}>
+            <AiLineIcon size={16} />
+            {running ? 'AI处理中' : title}
+          </button>
+          <div className="ai-menu-wrap">
+            <button
+              className="ai-menu-button"
+              type="button"
+              title="选择模型"
+              onClick={() => {
+                setMenuOpen((open) => !open);
+                setManualOpen(false);
+              }}
+            >
+              <ChevronDown size={16} />
+            </button>
+          </div>
+        </div>
+        <button
+          className="ai-plus-button"
+          type="button"
+          title="手动输入"
+          onClick={() => {
+            setManualOpen((open) => !open);
+            setMenuOpen(false);
+          }}
+        >
+          <Plus size={17} />
+        </button>
+      </div>
+
+      {menuOpen && (
+        <div className="ai-model-menu">
+          <div className="ai-model-menu-head">
+            <strong>选择模型</strong>
+            <button
+              className="icon-button"
+              type="button"
+              title="AI设置"
+              onClick={() => {
+                setMenuOpen(false);
+                setSettingsOpen(true);
+              }}
+            >
+              <Settings size={15} />
+            </button>
+          </div>
+          {(settings.profiles?.length ? settings.profiles : DEFAULT_PROFILES).length ? (
+            (settings.profiles?.length ? settings.profiles : DEFAULT_PROFILES).map((profile) => (
+              <button
+                key={profile.id}
+                className={profile.id === activeProfile.id ? 'active' : ''}
+                type="button"
+                onClick={() => selectProfile(profile.id)}
+              >
+                <span>{profile.name}</span>
+                <small>{profile.model || MODE_LABELS[profile.mode]}</small>
+              </button>
+            ))
+          ) : (
+            <div className="ai-model-empty">暂无模型，请点击右上角设置。</div>
+          )}
+        </div>
+      )}
+
+      {manualOpen && (
+        <div className="ai-manual-popover">
+          <div className="ai-manual-head">
+            <strong>手动输入</strong>
+            <button className="icon-button" type="button" title="关闭" onClick={() => setManualOpen(false)}>
+              <X size={15} />
+            </button>
+          </div>
+          <textarea
+            className="ai-manual-textarea"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={manualPlaceholder || placeholder}
+            spellCheck="false"
+          />
+        </div>
+      )}
+
+      {settingsOpen && (
+        <AiSettingsPanel
+          settings={settings}
+          onChange={updateSettings}
+          onClose={() => setSettingsOpen(false)}
+          activeType={type}
+          context={context}
+        />
+      )}
+    </div>
+  );
+}
+
+function AiSettingsPanel({ settings, onChange, onClose, activeType, context }) {
+  const [section, setSection] = useState('api');
+  const [draft, setDraft] = useState(settings);
+  const promptTextareaRef = useRef(null);
+  const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) || draft.profiles[0];
+  const promptKey = activeType === 'generate' ? 'generate' : 'precheck';
+  const promptTitle = promptKey === 'generate' ? 'AI预生成Rubrics提示词' : 'AI预检Rubrics提示词';
+  const placeholderEntries = useMemo(() => buildPlaceholderEntries(context), [context]);
+
+  function updateActiveProfile(patch) {
+    setDraft((previous) => ({
+      ...previous,
+      profiles: previous.profiles.map((profile) => (profile.id === previous.activeProfileId ? { ...profile, ...patch } : profile)),
+    }));
+  }
+
+  function updatePrompt(key, value) {
+    setDraft((previous) => ({
+      ...previous,
+      prompts: { ...previous.prompts, [key]: value },
+    }));
+  }
+
+  function save() {
+    onChange(draft);
+    onClose();
+  }
+
+  function resetPrompts() {
+    setDraft((previous) => ({ ...previous, prompts: DEFAULT_PROMPTS }));
+  }
+
+  function insertPlaceholder(key) {
+    const token = `&{${key}}`;
+    const textarea = promptTextareaRef.current;
+    const current = draft.prompts[promptKey] || '';
+    const start = textarea?.selectionStart ?? current.length;
+    const end = textarea?.selectionEnd ?? current.length;
+    const next = `${current.slice(0, start)}${token}${current.slice(end)}`;
+    updatePrompt(promptKey, next);
+    window.requestAnimationFrame(() => {
+      const target = promptTextareaRef.current;
+      if (!target) return;
+      const position = start + token.length;
+      target.focus();
+      target.setSelectionRange(position, position);
+    });
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <section className="ai-settings-panel" aria-label="AI功能设置">
+        <header className="template-modal-head">
+          <div>
+            <h2>AI功能设置</h2>
+            <p>配置 API、模型和提示词，结果会写回当前输入框</p>
+          </div>
+          <button className="icon-button" type="button" title="关闭" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="ai-settings-body">
+          <nav className="ai-settings-nav">
+            <button className={section === 'api' ? 'active' : ''} type="button" onClick={() => setSection('api')}>
+              API设置
+            </button>
+            <button className={section === 'prompt' ? 'active' : ''} type="button" onClick={() => setSection('prompt')}>
+              提示词设置
+            </button>
+          </nav>
+
+          <div className="ai-settings-content">
+            {section === 'api' ? (
+              <div className="ai-settings-form">
+                <label>
+                  当前模型
+                  <select value={draft.activeProfileId} onChange={(event) => setDraft((previous) => ({ ...previous, activeProfileId: event.target.value }))}>
+                    {draft.profiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  接口模式
+                  <select value={activeProfile.mode} onChange={(event) => updateActiveProfile({ mode: event.target.value })}>
+                    {Object.entries(MODE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  显示名称
+                  <input value={activeProfile.name} onChange={(event) => updateActiveProfile({ name: event.target.value })} />
+                </label>
+                <label>
+                  Base URL
+                  <input value={activeProfile.baseUrl} onChange={(event) => updateActiveProfile({ baseUrl: event.target.value })} />
+                </label>
+                <label>
+                  API Key
+                  <input type="password" value={activeProfile.apiKey} onChange={(event) => updateActiveProfile({ apiKey: event.target.value })} placeholder="Ollama 本地模式可留空" />
+                </label>
+                <label>
+                  模型名称
+                  <input value={activeProfile.model} onChange={(event) => updateActiveProfile({ model: event.target.value })} />
+                </label>
+                <label>
+                  温度
+                  <input type="number" min="0" max="2" step="0.1" value={activeProfile.temperature} onChange={(event) => updateActiveProfile({ temperature: event.target.value })} />
+                </label>
+                <label>
+                  最大输出
+                  <input type="number" min="256" step="128" value={activeProfile.maxTokens} onChange={(event) => updateActiveProfile({ maxTokens: event.target.value })} />
+                </label>
+              </div>
+            ) : (
+              <div className="ai-prompt-settings">
+                <div className="ai-prompt-toolbar">
+                  <strong>{promptTitle}</strong>
+                  <div className="ai-placeholder-buttons" aria-label="快捷插入占位符">
+                    {placeholderEntries.length ? (
+                      placeholderEntries.map((entry) => (
+                        <button key={entry.key} type="button" onClick={() => insertPlaceholder(entry.key)}>
+                          {entry.token}
+                        </button>
+                      ))
+                    ) : (
+                      <span>解析原始数据后显示可用占位符</span>
+                    )}
+                  </div>
+                </div>
+                <label className="ai-prompt-editor">
+                  <span>原始模板</span>
+                  <textarea
+                    ref={promptTextareaRef}
+                    value={draft.prompts[promptKey] || ''}
+                    onChange={(event) => updatePrompt(promptKey, event.target.value)}
+                  />
+                </label>
+                <p>点击上方按钮可插入占位符，发送 AI 请求时会用当前解析出的原始数据列自动替换。</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={resetPrompts}>
+            恢复默认提示词
+          </button>
+          <button className="ghost-button" type="button" onClick={onClose}>
+            取消
+          </button>
+          <button className="primary-button" type="button" onClick={save}>
+            保存设置
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}

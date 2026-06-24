@@ -20,7 +20,9 @@ import {
   X,
 } from 'lucide-react';
 import defaultRubricsReviewTemplate from '../prompt.md?raw';
+import { AiAssistField } from './aiAssist.jsx';
 import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, extractPageRemarkText, formatRemarkTree, parseRemarkIssues } from './rawRemarkParser.js';
+import { EMPTY_RAW_RECORD, buildAiPlaceholderContext, buildRawRecordTextWithCell, parseRawRecord } from './rawRecordParser.js';
 
 const STORAGE_KEY = 'rubrics-qc-workbench.v1';
 const FLOATING_PANEL_STATE_VERSION = 3;
@@ -37,14 +39,7 @@ const INITIAL_FLOATING_PANEL = {
   beautifyNote: true,
 };
 
-const EMPTY_DATA = {
-  prompt: '',
-  repo: '',
-  taskType: '',
-  rubrics: '',
-  score: '',
-  note: '',
-};
+const EMPTY_DATA = { ...EMPTY_RAW_RECORD };
 
 const DEFAULT_RUBRICS_REVIEW_TEMPLATE = defaultRubricsReviewTemplate.trim();
 
@@ -183,53 +178,11 @@ function escapeTsvCell(value) {
 }
 
 function buildRawTextWithRubricsCell(parseResult, rubricsText) {
-  const row = [...(parseResult?.row || [])];
-  if (row.length < 6) return null;
-  const nextRow = [row[0] || '', row[1] || '', row[2] || '', rubricsText, row[4] || '', row.slice(5).join('\n') || ''];
-  return nextRow.map(escapeTsvCell).join('\t');
+  return buildRawRecordTextWithCell(parseResult, parseResult?.rubricsColumnIndex ?? 3, rubricsText);
 }
 
 function parseRawRow(rawText) {
-  const clean = stripCodeFence(rawText);
-  const tabRow = pickDataRow(parseDelimitedRows(clean, '\t'));
-  let row = tabRow;
-  let delimiterName = 'Tab';
-
-  if (row.length < 6) {
-    const pipeRow = pickDataRow(parseDelimitedRows(clean, '|'));
-    if (pipeRow.length >= row.length) {
-      row = pipeRow;
-      delimiterName = '竖线';
-    }
-  }
-
-  const data =
-    row.length >= 6
-      ? {
-          prompt: row[0] || '',
-          repo: row[1] || '',
-          taskType: row[2] || '',
-          rubrics: row[3] || '',
-          score: row[4] || '',
-          note: row.slice(5).join('\n') || '',
-        }
-      : EMPTY_DATA;
-
-  if (row.length !== 6) {
-    return {
-      ok: false,
-      delimiterName,
-      row,
-      data,
-      errors: [
-        row.length < 6
-          ? `只解析到 ${row.length} 列，需要 6 列。`
-          : `解析到 ${row.length} 列，多出的列已合并到备注。`,
-      ],
-    };
-  }
-
-  return { ok: true, delimiterName, row, data, errors: [] };
+  return parseRawRecord(rawText);
 }
 
 function parseRepoList(repoText) {
@@ -365,7 +318,6 @@ function createReviewState(repos, rubrics, matrix, noteText, previous = {}) {
 
           return {
             expected: previousCheck?.expected ?? originalScore,
-            confirmed: Boolean(previousCheck?.confirmed),
             issue: previousCheck?.issue ?? '',
             annotationNote: previousCheck?.annotationNote ?? seededIssue,
             noteOpen: Boolean(previousCheck?.noteOpen),
@@ -563,7 +515,7 @@ function buildQcComment(review, repos, rubrics, matrix) {
       if (hasQcNote) {
         const reason = check.issue.trim() || '未填写质检理由';
         const scoreCorrection = hasMismatch ? `【分数应修改为${expectedScore}分】` : '';
-        rubricIssues.push(`第${rubricNumber}个rubrics -> ${reason}${scoreCorrection}`);
+        rubricIssues.push(`第${rubricNumber}条rubrics -> ${reason}${scoreCorrection}`);
       }
     });
 
@@ -639,9 +591,8 @@ function buildRubricsReviewPrompt(data) {
 }
 
 function buildRubricsReviewTemplateOutput(template, data) {
-  return String(template || '')
-    .replaceAll('&{prompt}', data.prompt || '')
-    .replaceAll('&{rubrics}', data.rubrics || '');
+  const context = buildAiPlaceholderContext(data);
+  return String(template || '').replace(/&\{([^}]+)\}/g, (_, key) => String(context?.[key] ?? ''));
 }
 
 function labelForRepo(url, index) {
@@ -827,41 +778,9 @@ function CombinedFloatingPanel({
 }
 
 function AnimatedIssueTextarea({ className, value, onChange, placeholder }) {
-  const wrapRef = useRef(null);
-  const textareaRef = useRef(null);
-
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const element = textareaRef.current;
-    if (!wrap || !element) return undefined;
-
-    const targetHeight = element.offsetHeight;
-    gsap.killTweensOf(wrap);
-    gsap.set(wrap, {
-      autoAlpha: 0,
-      height: 0,
-      marginTop: 0,
-      overflow: 'hidden',
-    });
-
-    const animation = gsap.to(wrap, {
-      autoAlpha: 1,
-      height: targetHeight,
-      marginTop: 8,
-      duration: 0.26,
-      ease: 'power2.out',
-      onComplete: () => {
-        gsap.set(wrap, { height: 'auto', overflow: 'visible' });
-      },
-    });
-
-    return () => animation.kill();
-  }, []);
-
   return (
-    <div className="issue-textarea-wrap" ref={wrapRef}>
+    <div className="issue-textarea-wrap">
       <textarea
-        ref={textareaRef}
         className={className}
         value={value}
         onChange={onChange}
@@ -919,7 +838,7 @@ function PromptTemplateModal({ template, previewText, onChange, onClose, onReset
 function RubricsFormatModal({ value, onChange, onConfirm, onClose }) {
   const issueNumbers = getRubricNumberSpacingIssueNumbers(value);
   const issueText = issueNumbers.length
-    ? `列表序号后面需要保留一个空格，第${issueNumbers.join('、')}个rubrics序号后没有空格。`
+    ? `列表序号后面需要保留一个空格，第${issueNumbers.join('、')}条rubrics序号后没有空格。`
     : '列表序号后面需要保留一个空格。';
 
   return (
@@ -1006,6 +925,7 @@ function App() {
     () => buildRubricsReviewTemplateOutput(reviewPromptTemplate, data),
     [reviewPromptTemplate, data],
   );
+  const aiPlaceholderContext = useMemo(() => buildAiPlaceholderContext(data), [data]);
 
   useEffect(() => {
     try {
@@ -1199,7 +1119,7 @@ function App() {
     } else {
       setRubricsFormatModal(null);
     }
-    if (showToast) setToast(result.ok ? `已按 ${result.delimiterName} 解析 6 列` : result.errors.join(' '));
+    if (showToast) setToast(result.ok ? `已按 ${result.delimiterName} 解析 ${result.displayName || '数据'}` : result.errors.join(' '));
   }
 
   function handleRawTextChange(value) {
@@ -1346,26 +1266,6 @@ function App() {
     }));
   }
 
-  function confirmOriginalForPage() {
-    if (!currentPage) return;
-    setReview((previous) => {
-      const pages = [...previous.pages];
-      const page = { ...pages[selectedRepo] };
-      page.visited = true;
-      page.checks = parsed.rubrics.map((_, rubricIndex) => {
-        const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
-        const previousCheck = page.checks?.[rubricIndex] || {};
-        return {
-          ...previousCheck,
-          expected: originalScore ?? previousCheck.expected ?? null,
-          confirmed: originalScore !== null,
-        };
-      });
-      pages[selectedRepo] = page;
-      return { ...previous, pages };
-    });
-  }
-
   function resetCurrentPage() {
     setReview((previous) => {
       const pages = [...previous.pages];
@@ -1374,7 +1274,7 @@ function App() {
       page.pageNote = '';
       page.checks = parsed.rubrics.map((_, rubricIndex) => {
         const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
-        return { expected: originalScore, confirmed: false, issue: '', noteOpen: false };
+        return { expected: originalScore, issue: '', noteOpen: false };
       });
       pages[selectedRepo] = page;
       return { ...previous, pages };
@@ -1409,7 +1309,7 @@ function App() {
               <div>
                 <h1>Rubrics 质检工作台</h1>
                 <div className="toolbar-subline">
-                  <p>prompt / repo / 任务类型 / rubrics / 评分 / 备注</p>
+                  <p>支持 6 列，也支持完整 19 列原始数据</p>
                   <div className="parse-line inline">
                     {parseResult ? (
                       <StatusBadge type={parseResult.ok ? 'success' : 'warning'}>
@@ -1469,7 +1369,7 @@ function App() {
               className="raw-input"
               value={rawText}
               onChange={(event) => handleRawTextChange(event.target.value)}
-              placeholder="在这里粘贴整行 6 列数据"
+              placeholder="在这里粘贴整行 6 列或 19 列数据"
               spellCheck="false"
             />
           </section>
@@ -1556,10 +1456,6 @@ function App() {
                 />
                 显示标注备注
               </label>
-              <button className="ghost-button" type="button" onClick={confirmOriginalForPage} disabled={!currentPage}>
-                <Check size={16} />
-                确认原评分
-              </button>
               <button className="ghost-button" type="button" onClick={resetCurrentPage} disabled={!currentPage}>
                 <RotateCcw size={16} />
                 重置本页
@@ -1569,30 +1465,23 @@ function App() {
 
           {currentPage ? (
             <>
-              <div className="review-top-inputs">
-                <div className="quick-issue-row">
-                  <label className="stacked-label">
-                    Rubrics质量问题
-                    <textarea
-                      value={review.promptRubricIssues}
-                      onChange={(event) => setReview((previous) => ({ ...previous, promptRubricIssues: event.target.value }))}
-                      placeholder="粘贴 AI 核查 rubrics 后给出的质量问题"
-                    />
-                  </label>
-                  <label className="stacked-label">
-                    页面整体问题
-                    <textarea
-                      value={currentPage.pageNote}
-                      onChange={(event) => updatePage(selectedRepo, { pageNote: event.target.value })}
-                    placeholder="记录当前页面的整体异常，例如无法打开、白屏、核心交互不可用"
-                  />
-                </label>
-              </div>
-              </div>
-
               <div className="review-body">
                 <div className="rubric-column">
-                <div className="rubric-list" ref={rubricListRef}>
+                  <div className="rubric-tool-strip">
+                    <strong>Rubrics列表</strong>
+                    <AiAssistField
+                      type="precheck"
+                      title="AI预检Rubrics"
+                      value={review.promptRubricIssues}
+                      onChange={(nextValue) => setReview((previous) => ({ ...previous, promptRubricIssues: nextValue }))}
+                      context={aiPlaceholderContext}
+                      placeholder="粘贴 AI 核查 rubrics 后给出的质量问题"
+                      manualPlaceholder="手动输入或粘贴 Rubrics质检备注"
+                      disabled={!data.prompt?.trim() || !data.rubrics?.trim()}
+                      onStatus={setToast}
+                    />
+                  </div>
+                  <div className="rubric-list" ref={rubricListRef}>
                   {parsed.rubrics.map((rubric, rubricIndex) => {
                     const check = currentPage.checks?.[rubricIndex] || {};
                     const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
@@ -1629,9 +1518,6 @@ function App() {
                             <StatusBadge type={originalScore === 0 ? 'danger' : originalScore === 1 ? 'success' : 'neutral'}>
                               原评分 {originalScore ?? '缺失'}
                             </StatusBadge>
-                            <StatusBadge type={check.confirmed ? 'success' : 'warning'}>
-                              {check.confirmed ? '已确认' : '未确认'}
-                            </StatusBadge>
                         </div>
                       </div>
 
@@ -1648,7 +1534,7 @@ function App() {
                           <button
                             type="button"
                             className={check.expected === 1 ? 'active pass' : ''}
-                            onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: 1, confirmed: true })}
+                            onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: 1 })}
                           >
                             <Check size={15} />
                             应为 1
@@ -1656,7 +1542,7 @@ function App() {
                           <button
                             type="button"
                             className={check.expected === 0 ? 'active fail' : ''}
-                            onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: 0, confirmed: true })}
+                            onClick={() => updateCheck(selectedRepo, rubricIndex, { expected: 0 })}
                           >
                             <X size={15} />
                             应为 0
@@ -1664,7 +1550,7 @@ function App() {
                         <button
                           type="button"
                           className={check.noteOpen && !hasMismatch ? 'active note' : ''}
-                          onClick={() => updateCheck(selectedRepo, rubricIndex, { noteOpen: !check.noteOpen, confirmed: true })}
+                          onClick={() => updateCheck(selectedRepo, rubricIndex, { noteOpen: !check.noteOpen })}
                         >
                           添加备注
                         </button>
@@ -1698,6 +1584,14 @@ function App() {
               </div>
 
                 <section className="output-panel">
+                  <label className="stacked-label side-top-field">
+                    页面整体问题
+                    <textarea
+                      value={currentPage.pageNote}
+                      onChange={(event) => updatePage(selectedRepo, { pageNote: event.target.value })}
+                      placeholder="记录当前页面的整体异常，例如无法打开、白屏、核心交互不可用"
+                    />
+                  </label>
                   <div className="section-head">
                     <div>
                       <h2>质检输出</h2>

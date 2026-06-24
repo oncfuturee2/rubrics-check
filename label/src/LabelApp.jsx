@@ -21,6 +21,8 @@ import {
   X,
 } from 'lucide-react';
 import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, parseRemarkIssues } from '../../src/rawRemarkParser.js';
+import { AiAssistField } from '../../src/aiAssist.jsx';
+import { EMPTY_RAW_RECORD, buildAiPlaceholderContext, buildRawRecordTextWithCell, parseRawRecord } from '../../src/rawRecordParser.js';
 
 const STORAGE_KEY = 'rubrics-label-workbench.v1';
 const PROMPT_PANEL_STATE_VERSION = 1;
@@ -33,11 +35,7 @@ const INITIAL_PROMPT_PANEL = {
   promptMode: 'markdown',
 };
 
-const EMPTY_DATA = {
-  prompt: '',
-  repo: '',
-  taskType: '',
-};
+const EMPTY_DATA = { ...EMPTY_RAW_RECORD };
 
 function trimCell(value) {
   return String(value ?? '').replace(/\u00A0/g, ' ').trim();
@@ -127,62 +125,7 @@ function getRubricNumberSpacingIssueNumbers(rubricsText) {
 }
 
 function parseRawInput(rawText) {
-  const clean = stripCodeFence(rawText);
-  let row = pickDataRow(parseDelimitedRows(clean, '\t'));
-  let delimiterName = 'Tab';
-
-  if (row.length < 2) {
-    const pipeRow = pickDataRow(parseDelimitedRows(clean, '|'));
-    if (pipeRow.length >= row.length) {
-      row = pipeRow;
-      delimiterName = '竖线';
-    }
-  }
-
-  if (row.length >= 6) {
-    return {
-      ok: true,
-      type: 'six',
-      delimiterName,
-      row,
-      data: {
-        prompt: row[0] || '',
-        repo: row[1] || '',
-        taskType: row[2] || '',
-        rubrics: row[3] || '',
-        score: row[4] || '',
-        note: row.slice(5).join('\n') || '',
-      },
-      errors: [],
-    };
-  }
-
-  if (row.length >= 2) {
-    return {
-      ok: true,
-      type: 'two',
-      delimiterName,
-      row,
-      data: {
-        prompt: row[0] || '',
-        repo: row[1] || '',
-        taskType: '',
-        rubrics: '',
-        score: '',
-        note: '',
-      },
-      errors: [],
-    };
-  }
-
-  return {
-    ok: false,
-    type: 'empty',
-    delimiterName,
-    row,
-    data: EMPTY_DATA,
-    errors: [`只解析到 ${row.length} 列，至少需要 prompt 和 repo 两列。`],
-  };
+  return parseRawRecord(rawText, { allowTwoColumns: true });
 }
 
 function parseRepoList(repoText) {
@@ -287,7 +230,13 @@ function validateParsedInput(result) {
   if (!String(data.prompt || '').trim()) errors.push('prompt 列为空。');
   if (!repos.length) errors.push('repo 列未解析到链接。');
 
-  if (result.type === 'two') {
+  const hasLabelPayload = Boolean(
+    String(data.rubrics || '').trim() ||
+    String(data.score || '').trim() ||
+    String(data.note || '').trim(),
+  );
+
+  if (result.type === 'two' || !hasLabelPayload) {
     return { ok: errors.length === 0, errors, warnings };
   }
 
@@ -370,7 +319,7 @@ function parseQcComment(commentText) {
       return;
     }
 
-    const matches = [...line.matchAll(/第\s*(\d+)\s*个\s*rub(?:rics|tics)?\s*->\s*([^；;]+)/gi)];
+    const matches = [...line.matchAll(/第\s*(\d+)\s*(?:条|个)\s*rub(?:rics|tics)?\s*->\s*([^；;]+)/gi)];
     matches.forEach((match) => {
       const rubricIndex = Number(match[1]) - 1;
       addQcIssue(issueMap, `${pageIndex}:${rubricIndex}`, parseQcIssueMessage(match[2]));
@@ -489,7 +438,7 @@ function buildNoteOutput(repos, rubrics, scores, notes) {
     rubrics.forEach((rubric, rubricIndex) => {
       if (scores?.[repoIndex]?.[rubricIndex] !== 0) return;
       const note = String(notes?.[repoIndex]?.[rubricIndex] || '').trim() || '未填写备注';
-      items.push(`第${rubricIndex + 1}个rubrics->${note}`);
+      items.push(`第${rubricIndex + 1}条rubrics->${note}`);
     });
     if (items.length) lines.push(`${lines.length + 1}.第${repoIndex + 1}个页面->${items.join('；')}`);
   });
@@ -518,10 +467,7 @@ function escapeTsvCell(value) {
 }
 
 function buildRawTextWithRubricsCell(parseResult, rubricsText) {
-  const row = [...(parseResult?.row || [])];
-  if (row.length < 6) return null;
-  const nextRow = [row[0] || '', row[1] || '', row[2] || '', rubricsText, row[4] || '', row.slice(5).join('\n') || ''];
-  return nextRow.map(escapeTsvCell).join('\t');
+  return buildRawRecordTextWithCell(parseResult, parseResult?.rubricsColumnIndex ?? 3, rubricsText);
 }
 
 function buildTableRowOutput(rubricsText, scoreText, noteText) {
@@ -609,27 +555,7 @@ function AutoGrowTextarea({ className = '', value, onChange, minHeight = 44, ...
 }
 
 function AnimatedNoteTextarea({ value, onChange, placeholder, hasMissingNote = false, flashToken = 0 }) {
-  const wrapRef = useRef(null);
   const textareaRef = useRef(null);
-
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const element = textareaRef.current;
-    if (!wrap || !element) return undefined;
-
-    const targetHeight = element.offsetHeight;
-    gsap.set(wrap, { autoAlpha: 0, height: 0, marginTop: 0, overflow: 'hidden' });
-    const animation = gsap.to(wrap, {
-      autoAlpha: 1,
-      height: targetHeight,
-      marginTop: 8,
-      duration: 0.24,
-      ease: 'power2.out',
-      onComplete: () => gsap.set(wrap, { height: 'auto', overflow: 'visible' }),
-    });
-
-    return () => animation.kill();
-  }, []);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -662,7 +588,7 @@ function AnimatedNoteTextarea({ value, onChange, placeholder, hasMissingNote = f
   }, [hasMissingNote]);
 
   return (
-    <div className="issue-textarea-wrap" ref={wrapRef}>
+    <div className="issue-textarea-wrap">
       <textarea
         ref={textareaRef}
         className={hasMissingNote ? 'missing-note-input' : ''}
@@ -677,7 +603,7 @@ function AnimatedNoteTextarea({ value, onChange, placeholder, hasMissingNote = f
 function RubricsFormatModal({ value, onChange, onConfirm, onClose }) {
   const issueNumbers = getRubricNumberSpacingIssueNumbers(value);
   const issueText = issueNumbers.length
-    ? `列表序号后面需要保留一个空格，第${issueNumbers.join('、')}个rubrics序号后没有空格。`
+    ? `列表序号后面需要保留一个空格，第${issueNumbers.join('、')}条rubrics序号后没有空格。`
     : '列表序号后面需要保留一个空格。';
 
   return (
@@ -904,6 +830,10 @@ function LabelApp() {
   const hasMissingNoteErrors = Object.keys(missingNoteKeys).length > 0;
   const currentPageIssue = qcIssueMap.get(`page:${selectedRepo}`);
   const otherQcIssue = qcIssueMap.get('other');
+  const aiPlaceholderContext = useMemo(
+    () => buildAiPlaceholderContext(data, { rubrics: rubricsText }),
+    [data, rubricsText],
+  );
 
   useEffect(() => {
     try {
@@ -1152,15 +1082,12 @@ function LabelApp() {
     const nextMatrix = parseScoreMatrix(result.data.score || '');
     const remarkMap = parseRemarkIssues(result.data.note || '');
 
-    setData({
-      prompt: result.data.prompt || '',
-      repo: result.data.repo || '',
-      taskType: result.data.taskType || '',
-    });
+    setData({ ...EMPTY_DATA, ...(result.data || {}) });
     setRubrics(nextRubrics);
     setRubricsText(buildRubricsText(nextRubrics));
     setScores(normalizeMatrix(nextRepos, nextRubrics, nextMatrix));
     setNotes(normalizeNotes(nextRepos, nextRubrics, null, remarkMap));
+    setQcComment(result.data.qcComment || '');
     setSelectedRepo(0);
     setFrameKey((value) => value + 1);
     setRepoTitles({});
@@ -1179,7 +1106,7 @@ function LabelApp() {
       } else {
         setRubricsFormatModal(null);
       }
-      if (showToast) setToast(result.type === 'six' ? '已解析 6 列标注数据' : '已解析 prompt / repo 两列');
+      if (showToast) setToast(`已解析 ${result.displayName || '原始'}数据`);
     } else {
       setRubricsFormatModal(null);
       if (showToast) setToast([...validation.errors, ...validation.warnings].join(' ') || result.errors.join(' '));
@@ -1432,11 +1359,11 @@ function LabelApp() {
               <div>
                 <h1>Rubrics 标注工作台</h1>
                 <div className="toolbar-subline">
-                  <p>支持 prompt/repo 两列，也支持原 6 列标注数据继续修改</p>
+                  <p>支持 prompt/repo 两列，也支持 6 列或完整 19 列数据继续修改</p>
                   <div className="parse-line inline">
                     {parseResult ? (
                       <StatusBadge type={inputValidation.ok ? 'success' : 'warning'}>
-                        {parseResult.ok ? `已解析：${parseResult.type === 'six' ? '6 列' : '2 列'}` : parseResult.errors.join(' ')}
+                        {parseResult.ok ? `已解析：${parseResult.displayName || '数据'}` : parseResult.errors.join(' ')}
                       </StatusBadge>
                     ) : (
                       <StatusBadge>等待解析</StatusBadge>
@@ -1474,7 +1401,7 @@ function LabelApp() {
               className="raw-input"
               value={rawText}
               onChange={(event) => handleRawTextChange(event.target.value)}
-              placeholder="粘贴 prompt / repo 两列，或粘贴 prompt、repo、任务类型、rubrics、评分、备注 6 列"
+              placeholder="粘贴 prompt / repo 两列，或粘贴 6 列/19 列整行数据"
               spellCheck="false"
             />
           </section>
@@ -1563,27 +1490,22 @@ function LabelApp() {
             </div>
           </div>
 
-          <div className="review-top-inputs label-top-inputs">
-            <label className="stacked-label">
-              rubrics
-              <textarea
-                value={rubricsText}
-                onChange={(event) => handleRubricsTextChange(event.target.value)}
-                placeholder="在这里编写或粘贴标准 rubrics，下面卡片会同步更新"
-              />
-            </label>
-            <label className="stacked-label">
-              质检评论
-              <textarea
-                value={qcComment}
-                onChange={(event) => setQcComment(event.target.value)}
-                placeholder="粘贴质检工作台输出的质检评论，卡片中会显示对应修改建议"
-              />
-            </label>
-          </div>
-
           <div className="review-body">
             <div className="rubric-column">
+              <div className="rubric-tool-strip">
+                <strong>Rubrics列表</strong>
+                <AiAssistField
+                  type="generate"
+                  title="AI预生成Rubrics"
+                  value={rubricsText}
+                  onChange={handleRubricsTextChange}
+                  context={aiPlaceholderContext}
+                  placeholder="在这里编写或粘贴标准 rubrics，下面卡片会同步更新"
+                  manualPlaceholder="手动输入或粘贴 Rubrics"
+                  disabled={!data.prompt?.trim()}
+                  onStatus={setToast}
+                />
+              </div>
               {(currentPageIssue || otherQcIssue) && (
                 <div className="qc-summary-list">
                   {currentPageIssue && (

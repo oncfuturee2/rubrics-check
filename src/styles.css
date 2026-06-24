@@ -234,6 +234,363 @@ pre {
   color: var(--primary);
 }
 
+.ai-assist-field {
+  position: relative;
+  align-content: start;
+  min-height: 32px;
+}
+
+.ai-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-action-group {
+  display: inline-flex;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.ai-main-button,
+.ai-menu-button,
+.ai-plus-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  border: 0;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.ai-main-button {
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px;
+  color: #0f766e;
+}
+
+.ai-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.ai-menu-button {
+  width: 34px;
+  border-left: 1px solid var(--border);
+}
+
+.ai-plus-button {
+  flex: 0 0 auto;
+  width: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.ai-main-button:hover,
+.ai-menu-button:hover,
+.ai-plus-button:hover {
+  background: var(--surface-green);
+  color: var(--primary);
+}
+
+.ai-main-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.ai-model-menu {
+  position: absolute;
+  top: 36px;
+  right: 38px;
+  z-index: 80;
+  width: 260px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
+  padding: 6px;
+}
+
+.ai-model-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  padding: 3px 2px 7px;
+}
+
+.ai-model-menu-head strong {
+  color: #334155;
+  font-size: 12px;
+}
+
+.ai-model-menu button:not(.icon-button) {
+  display: grid;
+  width: 100%;
+  justify-items: start;
+  gap: 2px;
+  border: 0;
+  border-radius: 7px;
+  background: #fff;
+  color: #334155;
+  padding: 7px 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ai-model-menu button:not(.icon-button):hover,
+.ai-model-menu button.active {
+  background: var(--surface-green);
+  color: var(--primary);
+}
+
+.ai-model-menu small {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-model-empty {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.ai-manual-popover {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  z-index: 75;
+  width: max(520px, 100%);
+  max-width: calc(100vw - 48px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.14);
+  padding: 8px;
+}
+
+.ai-manual-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.ai-manual-head strong {
+  color: #334155;
+  font-size: 12px;
+}
+
+.ai-manual-popover textarea.ai-manual-textarea {
+  min-height: 92px;
+  max-height: 180px;
+  resize: vertical;
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: #fbfdff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono CJK SC", monospace;
+}
+
+.ai-settings-panel {
+  display: flex;
+  width: min(980px, calc(100vw - 36px));
+  height: min(720px, calc(100vh - 36px));
+  min-height: 460px;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+}
+
+.ai-settings-body {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
+.ai-settings-nav {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-soft);
+  padding: 10px;
+}
+
+.ai-settings-nav button {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+  text-align: left;
+}
+
+.ai-settings-nav button.active {
+  border-color: #99f6e4;
+  background: var(--surface-green);
+  color: var(--primary);
+}
+
+.ai-settings-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.ai-settings-content > * {
+  width: 100%;
+}
+
+.ai-settings-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ai-settings-form label,
+.ai-prompt-settings label {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.ai-settings-form input,
+.ai-settings-form select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  outline: none;
+  padding: 7px 9px;
+  font: inherit;
+}
+
+.ai-settings-form input:focus,
+.ai-settings-form select:focus {
+  border-color: rgba(15, 118, 110, 0.62);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.ai-prompt-settings {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ai-prompt-toolbar {
+  display: grid;
+  gap: 7px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 8px;
+}
+
+.ai-prompt-toolbar strong {
+  color: #334155;
+  font-size: 13px;
+}
+
+.ai-placeholder-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-placeholder-buttons button,
+.ai-placeholder-buttons span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: #0f766e;
+  padding: 3px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ai-placeholder-buttons button {
+  cursor: pointer;
+}
+
+.ai-placeholder-buttons button:hover {
+  border-color: #99f6e4;
+  background: var(--surface-green);
+}
+
+.ai-placeholder-buttons span {
+  color: var(--muted);
+  font-family: inherit;
+}
+
+.ai-prompt-editor {
+  display: flex !important;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.ai-prompt-settings textarea {
+  min-height: 0;
+  height: 100%;
+  flex: 1;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono CJK SC", monospace;
+}
+
+.ai-prompt-settings p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .ghost-button {
   padding: 6px 9px;
   border: 1px solid var(--border);
@@ -552,7 +909,7 @@ button:active {
   flex: 1;
   overflow: hidden;
   padding: 8px;
-  padding-top: 0;
+  padding-top: 8px;
 }
 
 .review-top-inputs {
@@ -566,7 +923,47 @@ button:active {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
+}
+
+.rubric-tool-strip {
+  position: relative;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 34px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  padding: 0 4px 6px 2px;
+}
+
+.rubric-tool-strip > strong {
+  flex: 0 0 auto;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.rubric-tool-strip .ai-assist-field {
+  width: auto;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.side-top-field {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+.side-top-field textarea {
+  min-height: 72px;
+  max-height: 130px;
+  resize: vertical;
 }
 
 .check-toggle {
@@ -603,6 +1000,12 @@ button:active {
 .quick-issue-row textarea {
   min-height: 58px;
   max-height: 92px;
+}
+
+.quick-issue-row .ai-manual-popover textarea.ai-manual-textarea {
+  min-height: 96px;
+  max-height: 180px;
+  resize: vertical;
 }
 
 .task-details {
