@@ -1,24 +1,12 @@
 # Rubrics 工作台可执行文件构建
 
-目标：一个命令生成两个单独的 Windows 可执行文件，不生成安装包。
-
-产物：
-
-```text
-tauri/rubricsWork/dist-launchers/rubrics-qc.exe
-tauri/rubricsWork/dist-launchers/rubrics-label.exe
-```
-
-其中：
-
-- `rubrics-qc.exe`：质检工作台
-- `rubrics-label.exe`：标注工作台
-
-## 一键构建
+## 构建
 
 在项目根目录执行：
 
 ```bash
+npm install
+cd 
 npm run build:exe
 ```
 
