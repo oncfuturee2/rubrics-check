@@ -8,6 +8,7 @@
 npm install
 cd tauri/rubricsWork
 npm install
+cd ../../
 npm run build:exe
 ```
 
