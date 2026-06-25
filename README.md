@@ -1,19 +1,5 @@
 # Rubrics 工作台可执行文件构建
 
-## 构建
-
-在项目根目录执行：
-
-```bash
-npm install
-cd tauri/rubricsWork
-npm install
-cd ../../
-npm run build:exe
-```
-
-这就是最终构建命令。
-
 ## 首次构建前
 
 根目录安装依赖：
