@@ -22,46 +22,6 @@ cd ../..
 npm run build:exe
 ```
 
-## 构建流程
-
-`npm run build:exe` 会调用：
-
-```bash
-npm --prefix tauri/rubricsWork run build:exe
-```
-
-实际执行脚本：
-
-```text
-tauri/rubricsWork/scripts/build-launchers.mjs
-```
-
-该脚本会依次完成：
-
-1. 构建根目录质检工作台和 `label/` 标注工作台前端。
-2. 把前端静态资源复制到 Tauri 资源目录。
-3. 构建 Tauri 启动器前端。
-4. 用圆白菜图标构建并复制 `rubrics-qc.exe`。
-5. 用番茄图标构建并复制 `rubrics-label.exe`。
-
-脚本使用的是：
-
-```bash
-cargo build --release --manifest-path src-tauri/Cargo.toml
-```
-
-不是：
-
-```bash
-tauri build
-```
-
-所以不会生成安装包，只会复制最终 `.exe` 到：
-
-```text
-tauri/rubricsWork/dist-launchers/
-```
-
 ## 环境要求
 
 - Node.js 18 或更高版本
@@ -84,16 +44,7 @@ rustc -V
 cargo -V
 ```
 
-## 单独进入 Tauri 目录构建
-
-也可以在 Tauri 工程目录执行：
-
-```bash
-cd tauri/rubricsWork
-npm run build:exe
-```
-
-产物仍然输出到：
+产物输出到：
 
 ```text
 tauri/rubricsWork/dist-launchers/
