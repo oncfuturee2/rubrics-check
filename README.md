@@ -6,7 +6,8 @@
 
 ```bash
 npm install
-cd 
+cd tauri/rubricsWork
+npm install
 npm run build:exe
 ```
 
