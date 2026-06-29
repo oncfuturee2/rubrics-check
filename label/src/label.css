@@ -161,7 +161,7 @@
 }
 
 .label-output-grid {
-  grid-template-rows: minmax(112px, 0.74fr) minmax(82px, 0.38fr) minmax(104px, 0.54fr);
+  grid-template-rows: auto auto minmax(160px, 1fr);
   gap: 6px;
 }
 
@@ -170,6 +170,26 @@
 }
 
 .label-output-grid > .output-card {
+  min-height: 0;
+}
+
+.label-output-grid .auto-textarea-card {
+  min-height: 0;
+}
+
+.label-output-grid .auto-textarea-card textarea {
+  height: auto;
+}
+
+.label-rubrics-output-card textarea {
+  min-height: 178px;
+}
+
+.label-score-output-card textarea {
+  min-height: 84px;
+}
+
+.label-output-grid .output-comment-label {
   min-height: 0;
 }
 
@@ -215,7 +235,10 @@
 }
 
 .label-output-panel .prompt-side-card {
-  height: clamp(160px, 26vh, 280px);
+  height: clamp(220px, 34vh, 400px);
+  min-height: 190px;
+  max-height: 62vh;
+  resize: vertical;
 }
 
 .prompt-floating-panel {

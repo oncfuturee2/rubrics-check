@@ -14,7 +14,6 @@ import {
   Minimize2,
   Move,
   RefreshCw,
-  RotateCcw,
   Trash2,
   X,
 } from 'lucide-react';
@@ -1308,21 +1307,6 @@ function App() {
     }));
   }
 
-  function resetCurrentPage() {
-    setReview((previous) => {
-      const pages = [...previous.pages];
-      const page = { ...pages[selectedRepo] };
-      page.visited = false;
-      page.pageNote = '';
-      page.checks = parsed.rubrics.map((_, rubricIndex) => {
-        const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
-        return { expected: originalScore, issue: '', noteOpen: false };
-      });
-      pages[selectedRepo] = page;
-      return { ...previous, pages };
-    });
-  }
-
   async function copyAndToast(text, message) {
     try {
       await copyText(text);
@@ -1466,27 +1450,6 @@ function App() {
         </section>
 
         <section className="review-panel">
-          <div className="section-head compact">
-            <div>
-              <h2>当前页面核查</h2>
-              <p>{parsed.rubrics.length ? `第 ${selectedRepo + 1} 个页面，共 ${parsed.rubrics.length} 条 rubric` : '等待解析 rubrics'}</p>
-            </div>
-            <div className="button-row">
-              <label className="mini-toggle review-toggle">
-                <input
-                  type="checkbox"
-                  checked={showAnnotationNotes}
-                  onChange={(event) => setShowAnnotationNotes(event.target.checked)}
-                />
-                显示标注备注
-              </label>
-              <button className="ghost-button" type="button" onClick={resetCurrentPage} disabled={!currentPage}>
-                <RotateCcw size={16} />
-                重置本页
-              </button>
-            </div>
-          </div>
-
           {currentPage ? (
             <>
               <div className="review-body">
@@ -1494,17 +1457,25 @@ function App() {
                   <div className="rubric-tool-strip">
                     <strong>Rubrics列表</strong>
                     <div className="rubric-tool-actions">
+                      <label className="mini-toggle review-toggle">
+                        <input
+                          type="checkbox"
+                          checked={showAnnotationNotes}
+                          onChange={(event) => setShowAnnotationNotes(event.target.checked)}
+                        />
+                        显示标注备注
+                      </label>
                       <button
                         className="ghost-button prompt-copy-button"
                         type="button"
                         onClick={() => copyAndToast(reviewPromptText, '已复制 rubrics 质检提示词')}
                       >
                         <Clipboard size={16} />
-                        rubrics质检提示词
+                        质检提示词
                       </button>
                       <AiAssistField
                         type="precheck"
-                        title="AI预检Rubrics"
+                        title="AI预检"
                         value={review.promptRubricIssues}
                         onChange={(nextValue) => setReview((previous) => ({ ...previous, promptRubricIssues: nextValue }))}
                         context={aiPlaceholderContext}
@@ -1522,6 +1493,13 @@ function App() {
                       />
                     </div>
                   </div>
+                  <OutputCard title="页面整体问题" className="page-issue-card rubric-page-issue-card auto-textarea-card">
+                    <textarea
+                      value={currentPage.pageNote}
+                      onChange={(event) => updatePage(selectedRepo, { pageNote: event.target.value })}
+                      placeholder="记录当前页面的整体异常，例如无法打开、白屏、核心交互不可用"
+                    />
+                  </OutputCard>
                   <div className="rubric-list" ref={rubricListRef}>
                   {parsed.rubrics.map((rubric, rubricIndex) => {
                     const check = currentPage.checks?.[rubricIndex] || {};
@@ -1634,39 +1612,37 @@ function App() {
                     onNoteModeChange={setNoteMode}
                     onBeautifyNoteChange={setBeautifyNote}
                   />
-                  <OutputCard title="页面整体问题" className="page-issue-card">
-                    <textarea
-                      value={currentPage.pageNote}
-                      onChange={(event) => updatePage(selectedRepo, { pageNote: event.target.value })}
-                      placeholder="记录当前页面的整体异常，例如无法打开、白屏、核心交互不可用"
-                    />
-                  </OutputCard>
                   <section className="flat-output-section qc-output-card">
-                    <div className="flat-output-head">
-                      <strong>质检输出</strong>
-                      <div className="button-row">
-                        <button className="primary-button" type="button" onClick={() => copyAndToast(generatedComment, '已复制质检评论')}>
-                          <Copy size={16} />
-                          复制评论
-                        </button>
-                        <button className="ghost-button" type="button" onClick={() => copyAndToast(updatedMatrixText, '已复制评分矩阵')}>
-                          <Copy size={16} />
-                          复制评分
-                        </button>
-                      </div>
-                    </div>
                     <div className="output-grid">
-                      <OutputCard title="其它质检问题" className="nested-output-card">
+                      <OutputCard title="其它质检问题" className="nested-output-card auto-textarea-card">
                         <textarea
                           value={review.finalNote}
                           onChange={(event) => setReview((previous) => ({ ...previous, finalNote: event.target.value }))}
                           placeholder="逐行记录无法归入具体页面或具体 rubric 的问题"
                         />
                       </OutputCard>
-                      <OutputCard title="修正后评分" className="nested-output-card score-output-label">
+                      <OutputCard
+                        title="修正后评分"
+                        className="nested-output-card score-output-label"
+                        actions={
+                          <button className="ghost-button output-copy-button" type="button" onClick={() => copyAndToast(updatedMatrixText, '已复制评分矩阵')}>
+                            <Copy size={14} />
+                            复制评分
+                          </button>
+                        }
+                      >
                         <textarea value={updatedMatrixText} readOnly />
                       </OutputCard>
-                      <OutputCard title="质检评论输出" className="nested-output-card output-comment-label">
+                      <OutputCard
+                        title="质检评论输出"
+                        className="nested-output-card output-comment-label"
+                        actions={
+                          <button className="primary-button output-copy-button" type="button" onClick={() => copyAndToast(generatedComment, '已复制质检评论')}>
+                            <Copy size={14} />
+                            复制评论
+                          </button>
+                        }
+                      >
                         <textarea className="output-textarea" value={generatedComment} readOnly />
                       </OutputCard>
                     </div>
