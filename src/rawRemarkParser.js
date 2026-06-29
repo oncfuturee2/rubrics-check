@@ -1,11 +1,38 @@
 export const EMPTY_PARSED_ZERO_NOTE_MESSAGE = '该备注为空，可能是程序解析失败，请查看原始标注备注进行核对';
 
 function expandNumberList(value) {
-  return String(value || '')
-    .replace(/和/g, '、')
+  const numbers = [];
+  const seen = new Set();
+  const numberTextPattern = '[0-9零一二两三四五六七八九十]+';
+  const rangePattern = new RegExp(`^(${numberTextPattern})\\s*(?:-|~|至|到)\\s*(${numberTextPattern})$`);
+
+  function pushNumber(number) {
+    if (!Number.isInteger(number) || number <= 0 || seen.has(number)) return;
+    seen.add(number);
+    numbers.push(number);
+  }
+
+  String(value || '')
+    .replace(/[－–—～]/g, (match) => (match === '～' ? '~' : '-'))
+    .replace(/([0-9零一二两三四五六七八九十]+)\s*([-~至到])\s*([0-9零一二两三四五六七八九十]+)/g, '$1$2$3')
+    .replace(/[和及与]/g, '、')
     .split(/[、,，\s]+/)
-    .map((item) => Number(item))
-    .filter((item) => Number.isInteger(item) && item > 0);
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .forEach((item) => {
+      const rangeMatch = item.match(rangePattern);
+      if (rangeMatch) {
+        const start = parseChineseNumber(rangeMatch[1]);
+        const end = parseChineseNumber(rangeMatch[2]);
+        if (Number.isInteger(start) && Number.isInteger(end) && start <= end) {
+          for (let number = start; number <= end; number += 1) pushNumber(number);
+          return;
+        }
+      }
+      pushNumber(parseChineseNumber(item));
+    });
+
+  return numbers;
 }
 
 function parseChineseNumber(value) {
@@ -46,7 +73,7 @@ function getRemarkTokens(noteText) {
   const text = String(noteText || '').replace(/\r\n/g, '\n');
   const tokens = [];
   const pagePattern = /第\s*([0-9零一二两三四五六七八九十]+)\s*个\s*页面\s*(?:->|→|:|：)?/g;
-  const rubricPattern = /第\s*([0-9、,，\s和]+)\s*(?:条|个)\s*rub(?:rics|tics)?\s*(?:->|→|:|：)?/gi;
+  const rubricPattern = /第\s*([0-9零一二两三四五六七八九十、,，\s和及与\-－–—~～至到]+)\s*(?:条|个)\s*rub(?:rics|tics)?\s*(?:->|→|:|：)?/gi;
 
   for (const match of text.matchAll(pagePattern)) {
     tokens.push({
