@@ -6,6 +6,7 @@ import defaultLabelGenerateTemplate from '../prompt-label.md?raw';
 
 const AI_SETTINGS_KEY = 'rubrics-ai-assist.v1';
 const DEFAULT_ACTIVE_PROFILE_ID = 'openai-compatible';
+let preferRemoteSettings = false;
 
 const DEFAULT_PROFILES = [
   {
@@ -97,6 +98,23 @@ const DEFAULT_PROMPTS = {
   generate: defaultLabelGenerateTemplate.trim(),
 };
 
+export const AI_SETTINGS_CHANGED_EVENT = 'rubrics-ai-settings-changed';
+
+const DEFAULT_GITHUB_CONFIG = {
+  enabled: true,
+  owner: 'oncfuturee2',
+  repo: 'rubrics-check',
+  branch: 'main',
+  precheckPath: 'prompt.md',
+  generatePath: 'prompt-label.md',
+  token: '',
+};
+
+const PROMPT_KIND_LABELS = {
+  precheck: '质检提示词',
+  generate: '标注提示词',
+};
+
 const MODE_LABELS = {
   'openai-responses': 'OpenAI Responses',
   'openai-chat': 'OpenAI兼容 Chat',
@@ -110,39 +128,179 @@ function mergeProfiles(profiles) {
   return DEFAULT_PROFILES.map((profile) => ({ ...profile, ...(saved.find((item) => item.id === profile.id) || {}) }));
 }
 
+function createDefaultPromptVersion(type, patch = {}) {
+  return {
+    id: 'default',
+    name: type === 'generate' ? '默认标注提示词' : '默认质检提示词',
+    content: DEFAULT_PROMPTS[type] || '',
+    locked: true,
+    source: 'bundled',
+    ...patch,
+  };
+}
+
+function normalizePromptVersions(type, versions, legacyPrompt) {
+  const normalizedVersions = Array.isArray(versions)
+    ? versions
+        .filter((version) => version && typeof version === 'object')
+        .map((version) => ({
+          id: String(version.id || `local-${Date.now()}`),
+          name: String(version.name || PROMPT_KIND_LABELS[type] || '提示词版本'),
+          content: String(version.content || ''),
+          locked: Boolean(version.locked),
+          source: version.source || 'local',
+          commitSha: version.commitSha || null,
+          committedAt: version.committedAt || null,
+          fetchedAt: version.fetchedAt || null,
+          createdAt: version.createdAt || null,
+          updatedAt: version.updatedAt || null,
+        }))
+        .filter((version) => version.id && version.content.trim())
+    : [];
+
+  const defaultIndex = normalizedVersions.findIndex((version) => version.id === 'default');
+  const savedDefault = defaultIndex >= 0 ? normalizedVersions[defaultIndex] : null;
+  const defaultVersion =
+    savedDefault?.source === 'github'
+      ? { ...createDefaultPromptVersion(type), ...savedDefault, id: 'default', locked: true }
+      : createDefaultPromptVersion(type, savedDefault ? { ...savedDefault, content: DEFAULT_PROMPTS[type] || '', locked: true, source: savedDefault.source || 'bundled' } : {});
+
+  const rest = normalizedVersions.filter((version) => version.id !== 'default');
+  const legacy = String(legacyPrompt || '').trim();
+  const legacyPromptToSkip = type === 'generate' ? LEGACY_GENERATE_PROMPT : LEGACY_PRECHECK_PROMPT;
+  const hasLegacyCustom =
+    legacy &&
+    legacy !== DEFAULT_PROMPTS[type] &&
+    legacy !== legacyPromptToSkip &&
+    !rest.some((version) => version.content === legacy);
+  if (hasLegacyCustom) {
+    rest.push({
+      id: `local-migrated-${type}`,
+      name: '本地旧版提示词',
+      content: legacy,
+      locked: false,
+      source: 'local',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  }
+
+  return [defaultVersion, ...rest];
+}
+
+function getPromptVersion(settings, type, versionId) {
+  const versions = settings?.promptVersions?.[type] || [];
+  return versions.find((version) => version.id === versionId) || versions.find((version) => version.id === 'default') || createDefaultPromptVersion(type);
+}
+
+function getActivePromptVersion(settings, type) {
+  const versionId = settings?.activePromptVersionIds?.[type] || 'default';
+  return getPromptVersion(settings, type, versionId);
+}
+
+function getActivePromptContent(settings, type) {
+  return getActivePromptVersion(settings, type)?.content || DEFAULT_PROMPTS[type] || '';
+}
+
+function normalizeAiSettings(settings) {
+  const saved = settings && typeof settings === 'object' ? settings : {};
+  const savedPrompts = saved.prompts || {};
+  const precheckVersions = normalizePromptVersions('precheck', saved.promptVersions?.precheck, savedPrompts.precheck);
+  const generateVersions = normalizePromptVersions('generate', saved.promptVersions?.generate, savedPrompts.generate);
+  const activePromptVersionIds = {
+    precheck: saved.activePromptVersionIds?.precheck || 'default',
+    generate: saved.activePromptVersionIds?.generate || 'default',
+  };
+
+  if (!precheckVersions.some((version) => version.id === activePromptVersionIds.precheck)) {
+    activePromptVersionIds.precheck = 'default';
+  }
+  if (!generateVersions.some((version) => version.id === activePromptVersionIds.generate)) {
+    activePromptVersionIds.generate = 'default';
+  }
+
+  const normalized = {
+    ...saved,
+    activeProfileId: saved.activeProfileId || DEFAULT_ACTIVE_PROFILE_ID,
+    profiles: mergeProfiles(saved.profiles),
+    github: {
+      ...DEFAULT_GITHUB_CONFIG,
+      ...(saved.github || {}),
+    },
+    promptVersions: {
+      precheck: precheckVersions,
+      generate: generateVersions,
+    },
+    activePromptVersionIds,
+  };
+
+  normalized.prompts = {
+    precheck: getActivePromptContent(normalized, 'precheck'),
+    generate: getActivePromptContent(normalized, 'generate'),
+  };
+
+  return normalized;
+}
+
+export function getCurrentAiPromptTemplate(type) {
+  return getActivePromptContent(loadAiSettings(), type === 'generate' ? 'generate' : 'precheck');
+}
+
+export function fillAiPromptTemplate(template, context) {
+  return fillTemplate(template, context);
+}
+
 function loadAiSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || 'null');
     if (!saved) throw new Error('empty');
-    const savedPrompts = saved.prompts || {};
-    const prompts = {
-      ...DEFAULT_PROMPTS,
-      ...savedPrompts,
-      precheck:
-        !savedPrompts.precheck || savedPrompts.precheck === LEGACY_PRECHECK_PROMPT
-          ? DEFAULT_PROMPTS.precheck
-          : savedPrompts.precheck,
-      generate:
-        !savedPrompts.generate || savedPrompts.generate === LEGACY_GENERATE_PROMPT
-          ? DEFAULT_PROMPTS.generate
-          : savedPrompts.generate,
-    };
-    return {
-      activeProfileId: saved.activeProfileId || DEFAULT_ACTIVE_PROFILE_ID,
-      profiles: mergeProfiles(saved.profiles),
-      prompts,
-    };
+    return normalizeAiSettings(saved);
   } catch (error) {
-    return {
-      activeProfileId: DEFAULT_ACTIVE_PROFILE_ID,
-      profiles: DEFAULT_PROFILES,
-      prompts: DEFAULT_PROMPTS,
-    };
+    return normalizeAiSettings({});
   }
 }
 
-function saveAiSettings(settings) {
-  localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(settings));
+function saveAiSettings(settings, options = {}) {
+  const normalized = normalizeAiSettings(settings);
+  const persistLocal = options.persistLocal ?? !preferRemoteSettings;
+  if (persistLocal) {
+    localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(normalized));
+  } else {
+    localStorage.removeItem(AI_SETTINGS_KEY);
+  }
+  window.dispatchEvent(new CustomEvent(AI_SETTINGS_CHANGED_EVENT, { detail: normalized }));
+  return normalized;
+}
+
+async function loadRemoteAiSettings() {
+  const response = await fetch('/api/ai/settings');
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  preferRemoteSettings = true;
+  return normalizeAiSettings(await response.json());
+}
+
+async function persistRemoteAiSettings(settings) {
+  const response = await fetch('/api/ai/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(normalizeAiSettings(settings)),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return normalizeAiSettings(await response.json());
+}
+
+async function syncRemoteDefaultPrompts() {
+  const response = await fetch('/api/ai/sync-prompts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force: true }),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = await response.json();
+  return {
+    ...payload,
+    settings: normalizeAiSettings(payload.settings || payload),
+  };
 }
 
 function fillTemplate(template, context) {
@@ -528,6 +686,7 @@ export function AiAssistField({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const fieldRef = useRef(null);
+  const skipPersistRef = useRef(true);
 
   const activeProfile = useMemo(
     () => {
@@ -538,7 +697,27 @@ export function AiAssistField({
   );
 
   useEffect(() => {
-    saveAiSettings(settings);
+    let cancelled = false;
+    loadRemoteAiSettings()
+      .then((remoteSettings) => {
+        if (cancelled) return;
+        skipPersistRef.current = true;
+        setSettings(remoteSettings);
+        saveAiSettings(remoteSettings, { persistLocal: false });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (skipPersistRef.current) {
+      skipPersistRef.current = false;
+      return;
+    }
+    const normalized = saveAiSettings(settings);
+    persistRemoteAiSettings(normalized).catch(() => {});
   }, [settings]);
 
   useEffect(() => {
@@ -639,10 +818,7 @@ export function AiAssistField({
   }, [menuOpen]);
 
   function updateSettings(nextSettings) {
-    setSettings({
-      ...nextSettings,
-      profiles: nextSettings.profiles?.length ? nextSettings.profiles : DEFAULT_PROFILES,
-    });
+    setSettings(normalizeAiSettings(nextSettings));
   }
 
   function selectProfile(profileId) {
@@ -652,7 +828,7 @@ export function AiAssistField({
 
   async function runAi() {
     if (disabled || aiDisabled || running) return;
-    const template = promptTemplate?.template ?? settings.prompts[type] ?? DEFAULT_PROMPTS[type];
+    const template = getActivePromptContent(settings, type) || settings.prompts[type] || DEFAULT_PROMPTS[type];
     const promptText = addOutputGuard(type, fillTemplate(template, context));
     if (!promptText.trim()) {
       onStatus?.('没有可发送给 AI 的内容。');
@@ -783,13 +959,17 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
   const [modelOptions, setModelOptions] = useState([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelListMessage, setModelListMessage] = useState('');
+  const [syncingPrompts, setSyncingPrompts] = useState(false);
+  const [promptSyncMessage, setPromptSyncMessage] = useState('');
   const promptTextareaRef = useRef(null);
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) || draft.profiles[0];
   const promptKey = activeType === 'generate' ? 'generate' : 'precheck';
   const promptTitle = promptKey === 'generate' ? 'AI预生成Rubrics提示词' : 'AI预检Rubrics提示词';
   const placeholderEntries = useMemo(() => buildPlaceholderEntries(context), [context]);
-  const currentPromptText = promptTemplate?.template ?? draft.prompts[promptKey] ?? '';
-  const currentPromptPreview = promptTemplate?.preview ?? fillTemplate(currentPromptText, context);
+  const promptVersions = draft.promptVersions?.[promptKey] || [];
+  const currentPromptVersion = getActivePromptVersion(draft, promptKey);
+  const currentPromptText = currentPromptVersion?.content || '';
+  const currentPromptPreview = fillTemplate(currentPromptText, context);
 
   useEffect(() => {
     setModelOptions([]);
@@ -829,32 +1009,128 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
     }
   }
 
-  function updatePrompt(key, value) {
-    setDraft((previous) => ({
-      ...previous,
-      prompts: { ...previous.prompts, [key]: value },
-    }));
+  function selectPromptVersion(versionId) {
+    setDraft((previous) =>
+      normalizeAiSettings({
+        ...previous,
+        activePromptVersionIds: {
+          ...previous.activePromptVersionIds,
+          [promptKey]: versionId,
+        },
+      }),
+    );
   }
 
   function updateCurrentPrompt(value) {
-    if (promptTemplate?.onChange) {
-      promptTemplate.onChange(value);
-      return;
-    }
-    updatePrompt(promptKey, value);
+    if (currentPromptVersion?.locked) return;
+    setDraft((previous) =>
+      normalizeAiSettings({
+        ...previous,
+        promptVersions: {
+          ...previous.promptVersions,
+          [promptKey]: (previous.promptVersions?.[promptKey] || []).map((version) =>
+            version.id === currentPromptVersion.id
+              ? { ...version, content: value, updatedAt: Date.now() }
+              : version,
+          ),
+        },
+      }),
+    );
+  }
+
+  function createPromptVersion(copyCurrent = true) {
+    const id = `local-${promptKey}-${Date.now()}`;
+    const nextVersion = {
+      id,
+      name: `${PROMPT_KIND_LABELS[promptKey]} ${promptVersions.length}`,
+      content: copyCurrent ? currentPromptText : DEFAULT_PROMPTS[promptKey],
+      locked: false,
+      source: 'local',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    setDraft((previous) =>
+      normalizeAiSettings({
+        ...previous,
+        promptVersions: {
+          ...previous.promptVersions,
+          [promptKey]: [...(previous.promptVersions?.[promptKey] || []), nextVersion],
+        },
+        activePromptVersionIds: {
+          ...previous.activePromptVersionIds,
+          [promptKey]: id,
+        },
+      }),
+    );
+  }
+
+  function renameCurrentPromptVersion(name) {
+    if (currentPromptVersion?.locked) return;
+    setDraft((previous) =>
+      normalizeAiSettings({
+        ...previous,
+        promptVersions: {
+          ...previous.promptVersions,
+          [promptKey]: (previous.promptVersions?.[promptKey] || []).map((version) =>
+            version.id === currentPromptVersion.id
+              ? { ...version, name, updatedAt: Date.now() }
+              : version,
+          ),
+        },
+      }),
+    );
+  }
+
+  function deleteCurrentPromptVersion() {
+    if (currentPromptVersion?.locked) return;
+    setDraft((previous) =>
+      normalizeAiSettings({
+        ...previous,
+        promptVersions: {
+          ...previous.promptVersions,
+          [promptKey]: (previous.promptVersions?.[promptKey] || []).filter((version) => version.id !== currentPromptVersion.id),
+        },
+        activePromptVersionIds: {
+          ...previous.activePromptVersionIds,
+          [promptKey]: 'default',
+        },
+      }),
+    );
   }
 
   function save() {
-    onChange(draft);
+    onChange(normalizeAiSettings(draft));
     onClose();
   }
 
   function resetPrompts() {
-    if (promptTemplate?.onReset) {
-      promptTemplate.onReset();
-      return;
+    setDraft((previous) =>
+      normalizeAiSettings({
+        ...previous,
+        activePromptVersionIds: {
+          ...previous.activePromptVersionIds,
+          [promptKey]: 'default',
+        },
+      }),
+    );
+  }
+
+  async function refreshDefaultPrompts() {
+    setSyncingPrompts(true);
+    setPromptSyncMessage('');
+    try {
+      const payload = await syncRemoteDefaultPrompts();
+      setDraft(payload.settings);
+      saveAiSettings(payload.settings);
+      const results = payload.results || [];
+      const updatedCount = results.filter((item) => item.updated).length;
+      const errorCount = results.filter((item) => item.error).length;
+      setPromptSyncMessage(errorCount ? `已更新 ${updatedCount} 个默认提示词，${errorCount} 个文件同步失败。` : `已更新 ${updatedCount} 个默认提示词。`);
+    } catch (error) {
+      setPromptSyncMessage(`同步失败：${String(error.message || error)}`);
+    } finally {
+      setSyncingPrompts(false);
     }
-    setDraft((previous) => ({ ...previous, prompts: DEFAULT_PROMPTS }));
   }
 
   function insertPlaceholder(key) {
@@ -974,9 +1250,30 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                 </label>
               </div>
             ) : (
-              <div className={`ai-prompt-settings ${promptTemplate ? 'with-preview' : ''}`}>
+              <div className="ai-prompt-settings with-preview">
                 <div className="ai-prompt-toolbar">
                   <strong>{promptTemplate?.title || promptTitle}</strong>
+                  <div className="ai-prompt-version-tools">
+                    <select value={currentPromptVersion.id} onChange={(event) => selectPromptVersion(event.target.value)}>
+                      {promptVersions.map((version) => (
+                        <option key={version.id} value={version.id}>
+                          {version.name}{version.locked ? '（默认）' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <button className="ghost-button" type="button" onClick={() => createPromptVersion(true)}>
+                      复制为新版本
+                    </button>
+                    <button className="ghost-button" type="button" onClick={() => createPromptVersion(false)}>
+                      新建空白版本
+                    </button>
+                    <button className="ghost-button danger" type="button" onClick={deleteCurrentPromptVersion} disabled={currentPromptVersion.locked}>
+                      删除版本
+                    </button>
+                    <button className="ghost-button" type="button" onClick={refreshDefaultPrompts} disabled={syncingPrompts}>
+                      {syncingPrompts ? '更新中...' : '更新默认版本'}
+                    </button>
+                  </div>
                   <div className="ai-placeholder-buttons" aria-label="快捷插入占位符">
                     {placeholderEntries.length ? (
                       placeholderEntries.map((entry) => (
@@ -994,6 +1291,21 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                     )}
                   </div>
                 </div>
+                {promptSyncMessage && <div className="ai-prompt-sync-message">{promptSyncMessage}</div>}
+                <div className="ai-prompt-version-row">
+                  <label>
+                    <span>版本名称</span>
+                    <input
+                      value={currentPromptVersion.name || ''}
+                      onChange={(event) => renameCurrentPromptVersion(event.target.value)}
+                      disabled={currentPromptVersion.locked}
+                    />
+                  </label>
+                  <small>
+                    {currentPromptVersion.locked ? '默认版本不可修改；如需编辑，请复制为新版本。' : '当前版本会保存到本地数据库。'}
+                    {currentPromptVersion.committedAt ? ` GitHub 提交时间：${currentPromptVersion.committedAt}` : ''}
+                  </small>
+                </div>
                 <div className="ai-prompt-workspace">
                   <label className="ai-prompt-editor">
                     <span>原始模板</span>
@@ -1001,9 +1313,10 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                       ref={promptTextareaRef}
                       value={currentPromptText}
                       onChange={(event) => updateCurrentPrompt(event.target.value)}
+                      disabled={currentPromptVersion.locked}
                     />
                   </label>
-                  {promptTemplate && (
+                  {true && (
                     <section className="ai-prompt-preview">
                       <div className="ai-prompt-pane-title">
                         <strong>Markdown预览</strong>

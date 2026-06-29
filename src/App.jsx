@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import defaultRubricsReviewTemplate from '../prompt.md?raw';
-import { AiAssistField } from './aiAssist.jsx';
+import { AI_SETTINGS_CHANGED_EVENT, AiAssistField, getCurrentAiPromptTemplate } from './aiAssist.jsx';
 import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, extractPageRemarkText, formatRemarkTree, parseRemarkIssues } from './rawRemarkParser.js';
 import { EMPTY_RAW_RECORD, buildAiPlaceholderContext, buildRawRecordTextWithCell, parseRawRecord } from './rawRecordParser.js';
 
@@ -946,7 +946,7 @@ function App() {
   const [panelInteraction, setPanelInteraction] = useState(null);
   const [isFrameFullscreen, setIsFrameFullscreen] = useState(false);
   const [repoTitles, setRepoTitles] = useState({});
-  const [reviewPromptTemplate, setReviewPromptTemplate] = useState(DEFAULT_RUBRICS_REVIEW_TEMPLATE);
+  const [reviewPromptTemplate, setReviewPromptTemplate] = useState(() => getCurrentAiPromptTemplate('precheck') || DEFAULT_RUBRICS_REVIEW_TEMPLATE);
   const [rubricsFormatModal, setRubricsFormatModal] = useState(null);
   const [showAnnotationNotes, setShowAnnotationNotes] = useState(true);
   const rubricListRef = useRef(null);
@@ -973,6 +973,19 @@ function App() {
     () => buildRubricsReviewTemplateOutput(reviewPromptTemplate, data),
     [reviewPromptTemplate, data],
   );
+
+  useEffect(() => {
+    function syncCurrentPromptTemplate(event) {
+      const nextTemplate =
+        event?.detail?.prompts?.precheck ||
+        event?.detail?.promptVersions?.precheck?.find?.((version) => version.id === event.detail.activePromptVersionIds?.precheck)?.content ||
+        getCurrentAiPromptTemplate('precheck') ||
+        DEFAULT_RUBRICS_REVIEW_TEMPLATE;
+      setReviewPromptTemplate(nextTemplate);
+    }
+    window.addEventListener(AI_SETTINGS_CHANGED_EVENT, syncCurrentPromptTemplate);
+    return () => window.removeEventListener(AI_SETTINGS_CHANGED_EVENT, syncCurrentPromptTemplate);
+  }, []);
   const aiPlaceholderContext = useMemo(() => buildAiPlaceholderContext(data), [data]);
 
   useEffect(() => {
