@@ -20,6 +20,7 @@ const BUNDLED_QC_PROMPT: &str = include_str!("../../../../prompt.md");
 const BUNDLED_LABEL_PROMPT: &str = include_str!("../../../../prompt-label.md");
 const DB_FILE_NAME: &str = "rubrics-workbench.db";
 const AI_SETTINGS_KEY: &str = "ai_settings";
+const UI_PREFERENCES_KEY: &str = "ui_preferences";
 
 #[derive(Clone, Serialize)]
 struct LauncherInfo {
@@ -217,6 +218,27 @@ fn handle_client(mut stream: TcpStream) {
         return;
     }
 
+    if target.starts_with("/api/ui/preferences") {
+        if method == "OPTIONS" {
+            write_response(&mut stream, 204, "text/plain; charset=utf-8", b"", false);
+            return;
+        }
+
+        let response = match method {
+            "GET" => ui_preferences_response(),
+            "POST" => save_ui_preferences_response(&body),
+            _ => (405, r#"{"error":"method not allowed"}"#.to_string()),
+        };
+        write_response(
+            &mut stream,
+            response.0,
+            "application/json; charset=utf-8",
+            response.1.as_bytes(),
+            false,
+        );
+        return;
+    }
+
     if method != "GET" && method != "HEAD" {
         write_response(&mut stream, 405, "text/plain; charset=utf-8", b"Method Not Allowed", method == "HEAD");
         return;
@@ -366,6 +388,42 @@ fn sync_prompts_response(force: bool) -> (u16, String) {
         Ok(result) => (200, result.to_string()),
         Err(error) => (502, json!({ "error": error }).to_string()),
     }
+}
+
+fn ui_preferences_response() -> (u16, String) {
+    match kv_get(UI_PREFERENCES_KEY) {
+        Ok(Some(value)) => (200, normalize_ui_preferences(value).to_string()),
+        Ok(None) => (200, default_ui_preferences().to_string()),
+        Err(error) => (502, json!({ "error": error }).to_string()),
+    }
+}
+
+fn save_ui_preferences_response(body: &str) -> (u16, String) {
+    let parsed: Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(error) => return (400, json!({ "error": error.to_string() }).to_string()),
+    };
+    let preferences = normalize_ui_preferences(parsed);
+    match kv_set(UI_PREFERENCES_KEY, &preferences) {
+        Ok(()) => (200, preferences.to_string()),
+        Err(error) => (502, json!({ "error": error }).to_string()),
+    }
+}
+
+fn default_ui_preferences() -> Value {
+    json!({
+        "cardHeights": {}
+    })
+}
+
+fn normalize_ui_preferences(mut value: Value) -> Value {
+    if !value.is_object() {
+        value = default_ui_preferences();
+    }
+    if !value.get("cardHeights").map(Value::is_object).unwrap_or(false) {
+        value["cardHeights"] = json!({});
+    }
+    value
 }
 
 fn get_ai_settings() -> Result<Value, String> {

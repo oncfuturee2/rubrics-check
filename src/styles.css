@@ -2015,6 +2015,30 @@ button:active {
   padding: 0;
 }
 
+.output-panel .side-context-card[data-ui-height-key] {
+  resize: vertical;
+}
+
+.output-panel .side-context-card[data-ui-height-key] .prompt-content,
+.output-panel .side-context-card[data-ui-height-key] > pre,
+.output-panel .side-context-card[data-ui-height-key] .output-card-body {
+  flex: 1 1 auto;
+}
+
+.output-panel .output-card[data-ui-height-key] {
+  min-height: 72px;
+}
+
+.output-panel .output-card[data-ui-height-key].auto-textarea-card textarea {
+  height: 100%;
+}
+
+html.ui-card-resizing,
+html.ui-card-resizing * {
+  cursor: ns-resize !important;
+  user-select: none;
+}
+
 .output-panel .section-head {
   margin-bottom: 4px;
 }

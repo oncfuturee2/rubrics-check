@@ -21,6 +21,7 @@ import defaultRubricsReviewTemplate from '../prompt.md?raw';
 import { AI_NOTIFICATION_EVENT, AI_SETTINGS_CHANGED_EVENT, AiAssistField, getCurrentAiPromptTemplate } from './aiAssist.jsx';
 import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, extractPageRemarkText, formatRemarkTree, parseRemarkIssues } from './rawRemarkParser.js';
 import { EMPTY_RAW_RECORD, buildAiPlaceholderContext, buildRawRecordTextWithCell, parseRawRecord } from './rawRecordParser.js';
+import { usePersistentElementHeights } from './uiPreferences.js';
 
 const STORAGE_KEY = 'rubrics-qc-workbench.v1';
 const FLOATING_PANEL_STATE_VERSION = 3;
@@ -798,7 +799,7 @@ function SidePromptNotePanel({
 
   return (
     <section className="side-context-stack">
-      <div className="side-context-card prompt-side-card">
+      <div className="side-context-card prompt-side-card" data-ui-height-key="prompt">
         <div className="pane-title pane-title-with-actions">
           <span>原始 Prompt</span>
           <div className="mini-segmented" aria-label="Prompt 显示模式">
@@ -823,7 +824,7 @@ function SidePromptNotePanel({
         </div>
       </div>
 
-      <div className="side-context-card note-side-card">
+      <div className="side-context-card note-side-card" data-ui-height-key="note">
         <div className="pane-title pane-title-with-actions">
           <span>备注</span>
           <div className="note-toolbar">
@@ -859,9 +860,9 @@ function SidePromptNotePanel({
   );
 }
 
-function OutputCard({ title, actions, className = '', children }) {
+function OutputCard({ title, actions, className = '', heightKey, children }) {
   return (
-    <section className={`side-context-card output-card ${className}`}>
+    <section className={`side-context-card output-card ${className}`} data-ui-height-key={heightKey || undefined}>
       <div className="pane-title pane-title-with-actions">
         <span>{title}</span>
         {actions}
@@ -950,6 +951,7 @@ function App() {
   const [rubricsFormatModal, setRubricsFormatModal] = useState(null);
   const [showAnnotationNotes, setShowAnnotationNotes] = useState(true);
   const rubricListRef = useRef(null);
+  const outputPanelRef = useRef(null);
   const rawParseTimerRef = useRef(null);
 
   const parsed = useMemo(() => validateData(data), [data]);
@@ -960,6 +962,7 @@ function App() {
   const rubricQualityIssues = useMemo(() => parseRubricQualityIssues(review.promptRubricIssues), [review.promptRubricIssues]);
   const currentRepoUrl = parsed.repos[selectedRepo] || '';
   const currentPage = review.pages?.[selectedRepo];
+  usePersistentElementHeights(outputPanelRef, 'qc', `${repoKey}:${Boolean(currentPage)}`);
   const generatedComment = useMemo(
     () => buildQcComment(review, parsed.repos, parsed.rubrics, parsed.matrix),
     [review, parsed.repos, parsed.rubrics, parsed.matrix],
@@ -1634,7 +1637,7 @@ function App() {
                   </div>
               </div>
 
-                <section className="output-panel">
+                <section className="output-panel" ref={outputPanelRef}>
                   <SidePromptNotePanel
                     panel={floatingPanel}
                     prompt={data.prompt}
@@ -1646,7 +1649,7 @@ function App() {
                   />
                   <section className="flat-output-section qc-output-card">
                     <div className="output-grid">
-                      <OutputCard title="其它质检问题" className="nested-output-card auto-textarea-card">
+                      <OutputCard title="其它质检问题" className="nested-output-card auto-textarea-card" heightKey="other-issue">
                         <textarea
                           value={review.finalNote}
                           onChange={(event) => setReview((previous) => ({ ...previous, finalNote: event.target.value }))}
@@ -1656,6 +1659,7 @@ function App() {
                       <OutputCard
                         title="修正后评分"
                         className="nested-output-card score-output-label"
+                        heightKey="score"
                         actions={
                           <button className="ghost-button output-copy-button" type="button" onClick={() => copyAndToast(updatedMatrixText, '已复制评分矩阵')}>
                             <Copy size={14} />
@@ -1668,6 +1672,7 @@ function App() {
                       <OutputCard
                         title="质检评论输出"
                         className="nested-output-card output-comment-label"
+                        heightKey="comment"
                         actions={
                           <button className="primary-button output-copy-button" type="button" onClick={() => copyAndToast(generatedComment, '已复制质检评论')}>
                             <Copy size={14} />

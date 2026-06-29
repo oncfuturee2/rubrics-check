@@ -22,6 +22,7 @@ import {
 import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, parseRemarkIssues } from '../../src/rawRemarkParser.js';
 import { AI_NOTIFICATION_EVENT, AiAssistField } from '../../src/aiAssist.jsx';
 import { EMPTY_RAW_RECORD, buildAiPlaceholderContext, buildRawRecordTextWithCell, parseRawRecord } from '../../src/rawRecordParser.js';
+import { usePersistentElementHeights } from '../../src/uiPreferences.js';
 
 const STORAGE_KEY = 'rubrics-label-workbench.v1';
 const PROMPT_PANEL_STATE_VERSION = 1;
@@ -781,7 +782,7 @@ function PromptFloatingPanel({
 function SidePromptPanel({ panel, prompt, onPromptModeChange }) {
   return (
     <section className="side-context-stack label-side-context">
-      <div className="side-context-card prompt-side-card">
+      <div className="side-context-card prompt-side-card" data-ui-height-key="prompt">
         <div className="pane-title pane-title-with-actions">
           <span>原始 Prompt</span>
           <div className="mini-segmented">
@@ -809,9 +810,9 @@ function SidePromptPanel({ panel, prompt, onPromptModeChange }) {
   );
 }
 
-function OutputCard({ title, actions, className = '', children }) {
+function OutputCard({ title, actions, className = '', heightKey, children }) {
   return (
-    <section className={`side-context-card output-card ${className}`}>
+    <section className={`side-context-card output-card ${className}`} data-ui-height-key={heightKey || undefined}>
       <div className="pane-title pane-title-with-actions">
         <span>{title}</span>
         {actions}
@@ -844,6 +845,7 @@ function LabelApp() {
   const [rubricsFormatModal, setRubricsFormatModal] = useState(null);
   const rubricListRef = useRef(null);
   const noteOutputRef = useRef(null);
+  const outputPanelRef = useRef(null);
   const rawParseTimerRef = useRef(null);
 
   const repos = useMemo(() => parseRepoList(data.repo), [data.repo]);
@@ -851,6 +853,7 @@ function LabelApp() {
   const isRawInputValid = inputValidation.ok;
   const repoKey = useMemo(() => repos.join('\n'), [repos]);
   const currentRepoUrl = repos[selectedRepo] || '';
+  usePersistentElementHeights(outputPanelRef, 'label', `${repoKey}:${selectedRepo}`);
   const qcIssueMap = useMemo(() => parseQcComment(qcComment), [qcComment]);
   const finalRubricsText = useMemo(() => buildRubricsText(rubrics), [rubrics]);
   const scoreOutput = useMemo(() => JSON.stringify(normalizeMatrix(repos, rubrics, scores)), [repos, rubrics, scores]);
@@ -1685,7 +1688,7 @@ function LabelApp() {
               </div>
             </div>
 
-            <section className="output-panel label-output-panel">
+            <section className="output-panel label-output-panel" ref={outputPanelRef}>
               <SidePromptPanel
                 panel={promptPanel}
                 prompt={data.prompt}
@@ -1696,6 +1699,7 @@ function LabelApp() {
                   <OutputCard
                     title="rubrics"
                     className="nested-output-card auto-textarea-card label-rubrics-output-card"
+                    heightKey="rubrics"
                     actions={
                       <button className="ghost-button output-copy-button" type="button" onClick={() => copyAndToast(finalRubricsText, '已复制 rubrics')}>
                         <Copy size={14} />
@@ -1708,6 +1712,7 @@ function LabelApp() {
                   <OutputCard
                     title="评分"
                     className="nested-output-card auto-textarea-card label-score-output-card"
+                    heightKey="score"
                     actions={
                       <button className="ghost-button output-copy-button" type="button" onClick={() => copyResultAndToast(scoreOutput, '已复制评分')}>
                         <Copy size={14} />
@@ -1720,6 +1725,7 @@ function LabelApp() {
                   <OutputCard
                     title="备注"
                     className="nested-output-card output-comment-label"
+                    heightKey="note"
                     actions={
                       <button className="ghost-button output-copy-button" type="button" onClick={() => copyResultAndToast(noteOutput, '已复制备注')}>
                         <Copy size={14} />
