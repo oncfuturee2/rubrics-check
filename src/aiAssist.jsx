@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Plus, Settings, X } from 'lucide-react';
+import { ChevronDown, Copy, Plus, RefreshCw, Settings, Trash2, X } from 'lucide-react';
 import { gsap } from 'gsap';
 import defaultQcPrecheckTemplate from '../prompt.md?raw';
 import defaultLabelGenerateTemplate from '../prompt-label.md?raw';
@@ -305,6 +305,134 @@ async function syncRemoteDefaultPrompts() {
 
 function fillTemplate(template, context) {
   return String(template || '').replace(/&\{([^}]+)\}/g, (_, key) => String(context?.[key] ?? ''));
+}
+
+function renderAiInlineMarkdown(text) {
+  const parts = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = pattern.exec(text))) {
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+    const token = match[0];
+    if (token.startsWith('`')) {
+      parts.push(<code key={`${match.index}-code`}>{token.slice(1, -1)}</code>);
+    } else {
+      parts.push(<strong key={`${match.index}-strong`}>{token.slice(2, -2)}</strong>);
+    }
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts;
+}
+
+function renderAiMarkdownBlocks(value) {
+  const lines = String(value || '').split(/\r?\n/);
+  const blocks = [];
+  let unorderedItems = [];
+  let orderedItems = [];
+  let codeFence = null;
+  let codeLines = [];
+
+  function flushUnorderedList() {
+    if (!unorderedItems.length) return;
+    blocks.push(
+      <ul key={`ul-${blocks.length}`}>
+        {unorderedItems.map((item, index) => (
+          <li key={`${index}-${item}`}>{renderAiInlineMarkdown(item)}</li>
+        ))}
+      </ul>,
+    );
+    unorderedItems = [];
+  }
+
+  function flushOrderedList() {
+    if (!orderedItems.length) return;
+    blocks.push(
+      <ol key={`ol-${blocks.length}`}>
+        {orderedItems.map((item, index) => (
+          <li key={`${index}-${item}`}>{renderAiInlineMarkdown(item)}</li>
+        ))}
+      </ol>,
+    );
+    orderedItems = [];
+  }
+
+  function flushLists() {
+    flushUnorderedList();
+    flushOrderedList();
+  }
+
+  function flushCode() {
+    if (!codeFence) return;
+    blocks.push(
+      <pre className="markdown-code-block" key={`code-${blocks.length}`}>
+        <code>{codeLines.join('\n')}</code>
+      </pre>,
+    );
+    codeFence = null;
+    codeLines = [];
+  }
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    const fence = trimmed.match(/^(`{3,}|~{3,})/);
+
+    if (codeFence) {
+      if (fence && fence[1][0] === codeFence[0] && fence[1].length >= codeFence.length) {
+        flushCode();
+      } else {
+        codeLines.push(line);
+      }
+      return;
+    }
+
+    if (fence) {
+      flushLists();
+      codeFence = fence[1];
+      codeLines = [];
+      return;
+    }
+
+    const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+    const ordered = trimmed.match(/^\d+[.)、]\s+(.+)$/);
+
+    if (!trimmed) {
+      flushLists();
+      blocks.push(<div className="markdown-spacer" key={`blank-${index}`} />);
+      return;
+    }
+
+    if (heading) {
+      flushLists();
+      const level = Math.min(heading[1].length + 2, 6);
+      const HeadingTag = `h${level}`;
+      blocks.push(<HeadingTag key={`heading-${index}`}>{renderAiInlineMarkdown(heading[2])}</HeadingTag>);
+      return;
+    }
+
+    if (unordered) {
+      flushOrderedList();
+      unorderedItems.push(unordered[1]);
+      return;
+    }
+
+    if (ordered) {
+      flushUnorderedList();
+      orderedItems.push(ordered[1]);
+      return;
+    }
+
+    flushLists();
+    blocks.push(<p key={`p-${index}`}>{renderAiInlineMarkdown(trimmed)}</p>);
+  });
+
+  flushCode();
+  flushLists();
+  return blocks.length ? blocks : [<p key="empty">暂无预览内容</p>];
 }
 
 function buildPlaceholderEntries(context) {
@@ -961,7 +1089,9 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
   const [modelListMessage, setModelListMessage] = useState('');
   const [syncingPrompts, setSyncingPrompts] = useState(false);
   const [promptSyncMessage, setPromptSyncMessage] = useState('');
+  const [versionMenuOpen, setVersionMenuOpen] = useState(false);
   const promptTextareaRef = useRef(null);
+  const versionMenuRef = useRef(null);
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) || draft.profiles[0];
   const promptKey = activeType === 'generate' ? 'generate' : 'precheck';
   const promptTitle = promptKey === 'generate' ? 'AI预生成Rubrics提示词' : 'AI预检Rubrics提示词';
@@ -975,6 +1105,18 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
     setModelOptions([]);
     setModelListMessage('');
   }, [draft.activeProfileId, activeProfile.mode, activeProfile.baseUrl, activeProfile.apiKey]);
+
+  useEffect(() => {
+    if (!versionMenuOpen) return undefined;
+
+    function closeOnOutsidePointer(event) {
+      if (versionMenuRef.current?.contains(event.target)) return;
+      setVersionMenuOpen(false);
+    }
+
+    document.addEventListener('pointerdown', closeOnOutsidePointer, true);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer, true);
+  }, [versionMenuOpen]);
 
   function updateActiveProfile(patch) {
     setDraft((previous) => ({
@@ -1038,12 +1180,29 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
     );
   }
 
-  function createPromptVersion(copyCurrent = true) {
+  function copyVersionName(sourceName) {
+    const baseName = String(sourceName || PROMPT_KIND_LABELS[promptKey] || '提示词版本')
+      .replace(/\s+副本\d+$/, '')
+      .trim();
+    const existingNames = new Set(promptVersions.map((version) => version.name));
+    let copyIndex = 1;
+    while (existingNames.has(`${baseName} 副本${copyIndex}`)) copyIndex += 1;
+    return `${baseName} 副本${copyIndex}`;
+  }
+
+  function blankVersionName() {
+    const existingNames = new Set(promptVersions.map((version) => version.name));
+    let copyIndex = 1;
+    while (existingNames.has(`空白版本 ${copyIndex}`)) copyIndex += 1;
+    return `空白版本 ${copyIndex}`;
+  }
+
+  function createPromptVersion({ sourceVersion = currentPromptVersion, blank = false } = {}) {
     const id = `local-${promptKey}-${Date.now()}`;
     const nextVersion = {
       id,
-      name: `${PROMPT_KIND_LABELS[promptKey]} ${promptVersions.length}`,
-      content: copyCurrent ? currentPromptText : DEFAULT_PROMPTS[promptKey],
+      name: blank ? blankVersionName() : copyVersionName(sourceVersion?.name),
+      content: blank ? '' : (sourceVersion?.content || currentPromptText || ''),
       locked: false,
       source: 'local',
       createdAt: Date.now(),
@@ -1081,21 +1240,26 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
     );
   }
 
-  function deleteCurrentPromptVersion() {
-    if (currentPromptVersion?.locked) return;
+  function deletePromptVersion(versionId) {
+    const targetVersion = promptVersions.find((version) => version.id === versionId);
+    if (!targetVersion || targetVersion.locked) return;
     setDraft((previous) =>
       normalizeAiSettings({
         ...previous,
         promptVersions: {
           ...previous.promptVersions,
-          [promptKey]: (previous.promptVersions?.[promptKey] || []).filter((version) => version.id !== currentPromptVersion.id),
+          [promptKey]: (previous.promptVersions?.[promptKey] || []).filter((version) => version.id !== versionId),
         },
         activePromptVersionIds: {
           ...previous.activePromptVersionIds,
-          [promptKey]: 'default',
+          [promptKey]: previous.activePromptVersionIds?.[promptKey] === versionId ? 'default' : previous.activePromptVersionIds?.[promptKey],
         },
       }),
     );
+  }
+
+  function deleteCurrentPromptVersion() {
+    deletePromptVersion(currentPromptVersion?.id);
   }
 
   function save() {
@@ -1292,6 +1456,98 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                   </div>
                 </div>
                 {promptSyncMessage && <div className="ai-prompt-sync-message">{promptSyncMessage}</div>}
+                <div className="ai-prompt-version-control-row" ref={versionMenuRef}>
+                  <div className="ai-prompt-version-combo">
+                    <input
+                      value={currentPromptVersion.name || ''}
+                      onChange={(event) => renameCurrentPromptVersion(event.target.value)}
+                      disabled={currentPromptVersion.locked}
+                      title={currentPromptVersion.locked ? '默认版本不可修改，请复制为副本后编辑' : '修改当前提示词版本名称'}
+                    />
+                    <button
+                      type="button"
+                      title="选择提示词版本"
+                      onClick={() => setVersionMenuOpen((open) => !open)}
+                    >
+                      <ChevronDown size={16} />
+                    </button>
+                    {versionMenuOpen && (
+                      <div className="ai-prompt-version-menu">
+                        {promptVersions.map((version) => (
+                          <div
+                            className={`ai-prompt-version-menu-item ${version.id === currentPromptVersion.id ? 'active' : ''}`}
+                            key={version.id}
+                          >
+                            <button
+                              className="ai-prompt-version-select"
+                              type="button"
+                              onClick={() => {
+                                selectPromptVersion(version.id);
+                                setVersionMenuOpen(false);
+                              }}
+                            >
+                              <span>{version.name}{version.locked ? '（默认）' : ''}</span>
+                              <small>
+                                {version.locked ? '默认版本' : '自定义版本'}
+                                {version.committedAt ? ` · ${version.committedAt}` : ''}
+                              </small>
+                            </button>
+                            <button
+                              className="icon-button"
+                              type="button"
+                              title="复制为副本"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                createPromptVersion({ sourceVersion: version });
+                                setVersionMenuOpen(false);
+                              }}
+                            >
+                              <Copy size={14} />
+                            </button>
+                            <button
+                              className="icon-button danger"
+                              type="button"
+                              title={version.locked ? '默认版本不可删除' : '删除版本'}
+                              disabled={version.locked}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                deletePromptVersion(version.id);
+                                setVersionMenuOpen(false);
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                        <div className="ai-prompt-version-menu-footer">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              createPromptVersion({ blank: true });
+                              setVersionMenuOpen(false);
+                            }}
+                          >
+                            <Plus size={15} />
+                            新建空白版本
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    className="ghost-button ai-version-refresh-button"
+                    type="button"
+                    onClick={refreshDefaultPrompts}
+                    disabled={syncingPrompts}
+                  >
+                    <RefreshCw size={15} />
+                    {syncingPrompts ? '更新中...' : '更新默认版本'}
+                  </button>
+                  <small className="ai-prompt-version-hint">
+                    {currentPromptVersion.locked ? '默认版本不可修改；如需编辑，请在下拉菜单复制为副本。' : '当前自定义版本会保存到本地数据库。'}
+                    {currentPromptVersion.committedAt ? ` GitHub 提交时间：${currentPromptVersion.committedAt}` : ''}
+                  </small>
+                </div>
                 <div className="ai-prompt-version-row">
                   <label>
                     <span>版本名称</span>
@@ -1338,7 +1594,11 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                         </div>
                       </div>
                       <div className="ai-prompt-preview-body">
-                        <pre>{(previewMode === 'markdown' ? currentPromptPreview : currentPromptText) || ' '}</pre>
+                        {previewMode === 'markdown' ? (
+                          <div className="ai-prompt-rendered-markdown">{renderAiMarkdownBlocks(currentPromptPreview)}</div>
+                        ) : (
+                          <pre>{currentPromptPreview || ' '}</pre>
+                        )}
                       </div>
                     </section>
                   )}
