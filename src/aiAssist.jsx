@@ -850,33 +850,41 @@ export function AiAssistField({
   }, [settings]);
 
   useEffect(() => {
-    const target = fieldRef.current?.closest('.rubric-column')?.querySelector('.rubric-list');
+    const target = fieldRef.current?.closest('.rubric-column')?.querySelector('.rubric-list-shell, .rubric-list');
     if (!target) return undefined;
 
     if (!running) {
       target.classList.remove('ai-thinking-target');
       gsap.killTweensOf(target);
-      gsap.set(target, { clearProps: '--ai-border-angle,--ai-border-glow,--ai-border-opacity' });
+      gsap.set(target, { clearProps: '--ai-border-angle,--ai-border-glow,--ai-border-opacity,--ai-spark-x' });
       return undefined;
     }
 
     target.classList.add('ai-thinking-target');
     gsap.set(target, {
       '--ai-border-angle': '0deg',
-      '--ai-border-glow': 0.45,
+      '--ai-border-glow': 0.65,
       '--ai-border-opacity': 0.9,
+      '--ai-spark-x': '0%',
     });
 
     const spin = gsap.to(target, {
       '--ai-border-angle': '360deg',
-      duration: 2.2,
+      duration: 1.45,
       ease: 'none',
       repeat: -1,
     });
     const pulse = gsap.to(target, {
       '--ai-border-glow': 1,
       '--ai-border-opacity': 1,
-      duration: 0.85,
+      duration: 0.55,
+      ease: 'sine.inOut',
+      yoyo: true,
+      repeat: -1,
+    });
+    const spark = gsap.to(target, {
+      '--ai-spark-x': '100%',
+      duration: 1.2,
       ease: 'sine.inOut',
       yoyo: true,
       repeat: -1,
@@ -885,8 +893,9 @@ export function AiAssistField({
     return () => {
       spin.kill();
       pulse.kill();
+      spark.kill();
       target.classList.remove('ai-thinking-target');
-      gsap.set(target, { clearProps: '--ai-border-angle,--ai-border-glow,--ai-border-opacity' });
+      gsap.set(target, { clearProps: '--ai-border-angle,--ai-border-glow,--ai-border-opacity,--ai-spark-x' });
     };
   }, [running]);
 

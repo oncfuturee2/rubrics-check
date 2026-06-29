@@ -1558,7 +1558,8 @@ function LabelApp() {
                   )}
                 </div>
               )}
-              <div className="rubric-list" ref={rubricListRef}>
+              <div className="rubric-list-shell">
+                <div className="rubric-list" ref={rubricListRef}>
                 {rubrics.length ? (
                   rubrics.map((rubric, rubricIndex) => {
                     const score = scores[selectedRepo]?.[rubricIndex] ?? 1;
@@ -1674,6 +1675,7 @@ function LabelApp() {
                 ) : (
                   <div className="empty-state large">在上方 rubrics 输入框编写条目，或点击下方添加</div>
                 )}
+                </div>
               </div>
               <div className="add-rubric-row">
                 <button className="primary-button" type="button" onClick={addRubric}>

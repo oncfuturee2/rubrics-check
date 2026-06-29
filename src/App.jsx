@@ -1530,7 +1530,8 @@ function App() {
                       placeholder="记录当前页面的整体异常，例如无法打开、白屏、核心交互不可用"
                     />
                   </OutputCard>
-                  <div className="rubric-list" ref={rubricListRef}>
+                  <div className="rubric-list-shell">
+                    <div className="rubric-list" ref={rubricListRef}>
                   {parsed.rubrics.map((rubric, rubricIndex) => {
                     const check = currentPage.checks?.[rubricIndex] || {};
                     const originalScore = getOriginalScore(parsed.matrix, selectedRepo, rubricIndex);
@@ -1629,7 +1630,8 @@ function App() {
                       </article>
                     );
                   })}
-                </div>
+                    </div>
+                  </div>
               </div>
 
                 <section className="output-panel">
