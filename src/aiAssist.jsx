@@ -99,6 +99,7 @@ const DEFAULT_PROMPTS = {
 };
 
 export const AI_SETTINGS_CHANGED_EVENT = 'rubrics-ai-settings-changed';
+export const AI_NOTIFICATION_EVENT = 'rubrics-ai-notification';
 
 const DEFAULT_GITHUB_CONFIG = {
   enabled: true,
@@ -1088,7 +1089,6 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelListMessage, setModelListMessage] = useState('');
   const [syncingPrompts, setSyncingPrompts] = useState(false);
-  const [promptSyncMessage, setPromptSyncMessage] = useState('');
   const [versionMenuOpen, setVersionMenuOpen] = useState(false);
   const promptTextareaRef = useRef(null);
   const versionMenuRef = useRef(null);
@@ -1281,7 +1281,6 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
 
   async function refreshDefaultPrompts() {
     setSyncingPrompts(true);
-    setPromptSyncMessage('');
     try {
       const payload = await syncRemoteDefaultPrompts();
       setDraft(payload.settings);
@@ -1289,9 +1288,10 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
       const results = payload.results || [];
       const updatedCount = results.filter((item) => item.updated).length;
       const errorCount = results.filter((item) => item.error).length;
-      setPromptSyncMessage(errorCount ? `已更新 ${updatedCount} 个默认提示词，${errorCount} 个文件同步失败。` : `已更新 ${updatedCount} 个默认提示词。`);
+      const message = errorCount ? `已更新 ${updatedCount} 个默认提示词，${errorCount} 个文件同步失败。` : `已更新 ${updatedCount} 个默认提示词。`;
+      window.dispatchEvent(new CustomEvent(AI_NOTIFICATION_EVENT, { detail: { type: errorCount ? 'warning' : 'success', message } }));
     } catch (error) {
-      setPromptSyncMessage(`同步失败：${String(error.message || error)}`);
+      window.dispatchEvent(new CustomEvent(AI_NOTIFICATION_EVENT, { detail: { type: 'error', message: `同步失败：${String(error.message || error)}` } }));
     } finally {
       setSyncingPrompts(false);
     }
@@ -1455,7 +1455,6 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                     )}
                   </div>
                 </div>
-                {promptSyncMessage && <div className="ai-prompt-sync-message">{promptSyncMessage}</div>}
                 <div className="ai-prompt-version-control-row" ref={versionMenuRef}>
                   <div className="ai-prompt-version-combo">
                     <input

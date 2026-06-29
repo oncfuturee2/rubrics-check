@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import defaultRubricsReviewTemplate from '../prompt.md?raw';
-import { AI_SETTINGS_CHANGED_EVENT, AiAssistField, getCurrentAiPromptTemplate } from './aiAssist.jsx';
+import { AI_NOTIFICATION_EVENT, AI_SETTINGS_CHANGED_EVENT, AiAssistField, getCurrentAiPromptTemplate } from './aiAssist.jsx';
 import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, extractPageRemarkText, formatRemarkTree, parseRemarkIssues } from './rawRemarkParser.js';
 import { EMPTY_RAW_RECORD, buildAiPlaceholderContext, buildRawRecordTextWithCell, parseRawRecord } from './rawRecordParser.js';
 
@@ -985,6 +985,15 @@ function App() {
     }
     window.addEventListener(AI_SETTINGS_CHANGED_EVENT, syncCurrentPromptTemplate);
     return () => window.removeEventListener(AI_SETTINGS_CHANGED_EVENT, syncCurrentPromptTemplate);
+  }, []);
+
+  useEffect(() => {
+    function handleAiNotification(event) {
+      const message = event?.detail?.message;
+      if (message) setToast(message);
+    }
+    window.addEventListener(AI_NOTIFICATION_EVENT, handleAiNotification);
+    return () => window.removeEventListener(AI_NOTIFICATION_EVENT, handleAiNotification);
   }, []);
   const aiPlaceholderContext = useMemo(() => buildAiPlaceholderContext(data), [data]);
 

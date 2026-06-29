@@ -20,7 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, parseRemarkIssues } from '../../src/rawRemarkParser.js';
-import { AiAssistField } from '../../src/aiAssist.jsx';
+import { AI_NOTIFICATION_EVENT, AiAssistField } from '../../src/aiAssist.jsx';
 import { EMPTY_RAW_RECORD, buildAiPlaceholderContext, buildRawRecordTextWithCell, parseRawRecord } from '../../src/rawRecordParser.js';
 
 const STORAGE_KEY = 'rubrics-label-workbench.v1';
@@ -932,6 +932,15 @@ function LabelApp() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    function handleAiNotification(event) {
+      const message = event?.detail?.message;
+      if (message) setToast(message);
+    }
+    window.addEventListener(AI_NOTIFICATION_EVENT, handleAiNotification);
+    return () => window.removeEventListener(AI_NOTIFICATION_EVENT, handleAiNotification);
+  }, []);
+
   useEffect(
     () => () => {
       if (rawParseTimerRef.current) window.clearTimeout(rawParseTimerRef.current);
@@ -1510,7 +1519,6 @@ function LabelApp() {
                   placeholder="在这里编写或粘贴标准 rubrics，下面卡片会同步更新"
                   manualPlaceholder="手动输入或粘贴 Rubrics"
                   disabled={!data.prompt?.trim()}
-                  aiDisabled
                   onStatus={setToast}
                 />
               </div>
