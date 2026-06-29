@@ -653,6 +653,13 @@ function StatusBadge({ type = 'neutral', children }) {
   return <span className={`status-badge ${type}`}>{children}</span>;
 }
 
+function resolveStoredReviewPromptTemplate(saved) {
+  const savedTemplate = saved?.reviewPromptTemplate;
+  if (!savedTemplate) return DEFAULT_RUBRICS_REVIEW_TEMPLATE;
+  if (saved.reviewPromptTemplateBase && savedTemplate !== saved.reviewPromptTemplateBase) return savedTemplate;
+  return DEFAULT_RUBRICS_REVIEW_TEMPLATE;
+}
+
 function CombinedFloatingPanel({
   panel,
   prompt,
@@ -978,7 +985,7 @@ function App() {
       setReview(saved.review || createReviewState([], [], null, ''));
       setSelectedRepo(saved.selectedRepo || 0);
       setShowAnnotationNotes(saved.showAnnotationNotes !== false);
-      setReviewPromptTemplate(saved.reviewPromptTemplate || DEFAULT_RUBRICS_REVIEW_TEMPLATE);
+      setReviewPromptTemplate(resolveStoredReviewPromptTemplate(saved));
       const loadedFloatingPanel =
         saved.floatingPanel ||
           (saved.floatingPanels?.prompt
@@ -1006,6 +1013,7 @@ function App() {
       selectedRepo,
       showAnnotationNotes,
       reviewPromptTemplate,
+      reviewPromptTemplateBase: DEFAULT_RUBRICS_REVIEW_TEMPLATE,
       floatingPanel,
       floatingPanelVersion: FLOATING_PANEL_STATE_VERSION,
       repoTitles,

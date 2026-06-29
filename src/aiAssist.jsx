@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Plus, Settings, X } from 'lucide-react';
 import { gsap } from 'gsap';
+import defaultQcPrecheckTemplate from '../prompt.md?raw';
+import defaultLabelGenerateTemplate from '../prompt-label.md?raw';
 
 const AI_SETTINGS_KEY = 'rubrics-ai-assist.v1';
 const DEFAULT_ACTIVE_PROFILE_ID = 'openai-compatible';
@@ -58,37 +60,41 @@ const DEFAULT_PROFILES = [
   },
 ];
 
+const LEGACY_GENERATE_PROMPT = [
+  '你是专业的前端游戏/网页标注员。请根据 prompt 预生成可评分的 Rubrics。',
+  '要求：',
+  '- 每条 rubric 只检查一件明确可验证的事情',
+  '- 不写“美观、友好、流畅”等主观项',
+  '- 覆盖 prompt 的核心玩法、交互、视觉、语言、技术框架等明确要求',
+  '- 输出 4 到 10 条',
+  '- 只输出编号列表，格式为：1. xxx',
+  '',
+  'prompt:',
+  '```',
+  '&{prompt}',
+  '```',
+].join('\n');
+
+const LEGACY_PRECHECK_PROMPT = [
+  '你是严谨的 Rubrics 质检助手。请根据 prompt 检查 rubrics 是否符合任务要求和评分标准。',
+  '只输出需要修改的问题；如果没有问题，只输出“合格”。',
+  '输出格式必须为 Markdown 无序列表，具体到条目时使用：',
+  '- 第n条rubrics -> 问题描述',
+  '',
+  'prompt:',
+  '```',
+  '&{prompt}',
+  '```',
+  '',
+  'rubrics:',
+  '```',
+  '&{rubrics}',
+  '```',
+].join('\n');
+
 const DEFAULT_PROMPTS = {
-  precheck: [
-    '你是严谨的 Rubrics 质检助手。请根据 prompt 检查 rubrics 是否符合任务要求和评分标准。',
-    '只输出需要修改的问题；如果没有问题，只输出“合格”。',
-    '输出格式必须为 Markdown 无序列表，具体到条目时使用：',
-    '- 第n条rubrics -> 问题描述',
-    '',
-    'prompt:',
-    '```',
-    '&{prompt}',
-    '```',
-    '',
-    'rubrics:',
-    '```',
-    '&{rubrics}',
-    '```',
-  ].join('\n'),
-  generate: [
-    '你是专业的前端游戏/网页标注员。请根据 prompt 预生成可评分的 Rubrics。',
-    '要求：',
-    '- 每条 rubric 只检查一件明确可验证的事情',
-    '- 不写“美观、友好、流畅”等主观项',
-    '- 覆盖 prompt 的核心玩法、交互、视觉、语言、技术框架等明确要求',
-    '- 输出 4 到 10 条',
-    '- 只输出编号列表，格式为：1. xxx',
-    '',
-    'prompt:',
-    '```',
-    '&{prompt}',
-    '```',
-  ].join('\n'),
+  precheck: defaultQcPrecheckTemplate.trim(),
+  generate: defaultLabelGenerateTemplate.trim(),
 };
 
 const MODE_LABELS = {
@@ -108,10 +114,23 @@ function loadAiSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || 'null');
     if (!saved) throw new Error('empty');
+    const savedPrompts = saved.prompts || {};
+    const prompts = {
+      ...DEFAULT_PROMPTS,
+      ...savedPrompts,
+      precheck:
+        !savedPrompts.precheck || savedPrompts.precheck === LEGACY_PRECHECK_PROMPT
+          ? DEFAULT_PROMPTS.precheck
+          : savedPrompts.precheck,
+      generate:
+        !savedPrompts.generate || savedPrompts.generate === LEGACY_GENERATE_PROMPT
+          ? DEFAULT_PROMPTS.generate
+          : savedPrompts.generate,
+    };
     return {
       activeProfileId: saved.activeProfileId || DEFAULT_ACTIVE_PROFILE_ID,
       profiles: mergeProfiles(saved.profiles),
-      prompts: { ...DEFAULT_PROMPTS, ...(saved.prompts || {}) },
+      prompts,
     };
   } catch (error) {
     return {
