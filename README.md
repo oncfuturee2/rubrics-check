@@ -1,5 +1,10 @@
 # Rubrics 工作台可执行文件构建
 
+# 预览
+标注工作台:
+<img width="1954" height="1062" alt="20260630105922_rec_" src="https://github.com/user-attachments/assets/a5ad5eaa-7681-423b-8077-d5c3e6ce3b16" />
+
+
 ## 首次构建前
 
 根目录安装依赖：
