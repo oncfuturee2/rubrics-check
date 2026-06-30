@@ -61,38 +61,6 @@ const DEFAULT_PROFILES = [
   },
 ];
 
-const LEGACY_GENERATE_PROMPT = [
-  '你是专业的前端游戏/网页标注员。请根据 prompt 预生成可评分的 Rubrics。',
-  '要求：',
-  '- 每条 rubric 只检查一件明确可验证的事情',
-  '- 不写“美观、友好、流畅”等主观项',
-  '- 覆盖 prompt 的核心玩法、交互、视觉、语言、技术框架等明确要求',
-  '- 输出 4 到 10 条',
-  '- 只输出编号列表，格式为：1. xxx',
-  '',
-  'prompt:',
-  '```',
-  '&{prompt}',
-  '```',
-].join('\n');
-
-const LEGACY_PRECHECK_PROMPT = [
-  '你是严谨的 Rubrics 质检助手。请根据 prompt 检查 rubrics 是否符合任务要求和评分标准。',
-  '只输出需要修改的问题；如果没有问题，只输出“合格”。',
-  '输出格式必须为 Markdown 无序列表，具体到条目时使用：',
-  '- 第n条rubrics -> 问题描述',
-  '',
-  'prompt:',
-  '```',
-  '&{prompt}',
-  '```',
-  '',
-  'rubrics:',
-  '```',
-  '&{rubrics}',
-  '```',
-].join('\n');
-
 const DEFAULT_PROMPTS = {
   precheck: defaultQcPrecheckTemplate.trim(),
   generate: defaultLabelGenerateTemplate.trim(),
@@ -175,10 +143,11 @@ function createDefaultPromptVersion(type, patch = {}) {
   };
 }
 
-function normalizePromptVersions(type, versions, legacyPrompt) {
+function normalizePromptVersions(type, versions) {
   const normalizedVersions = Array.isArray(versions)
     ? versions
         .filter((version) => version && typeof version === 'object')
+        .filter((version) => !String(version.id || '').startsWith('local-migrated-') && version.name !== '本地旧版提示词')
         .map((version) => ({
           id: String(version.id || `local-${Date.now()}`),
           name: String(version.name || PROMPT_KIND_LABELS[type] || '提示词版本'),
@@ -191,7 +160,7 @@ function normalizePromptVersions(type, versions, legacyPrompt) {
           createdAt: version.createdAt || null,
           updatedAt: version.updatedAt || null,
         }))
-        .filter((version) => version.id && version.content.trim())
+        .filter((version) => version.id && (version.id === 'default' || version.source === 'local' || version.content.trim()))
     : [];
 
   const defaultIndex = normalizedVersions.findIndex((version) => version.id === 'default');
@@ -201,27 +170,7 @@ function normalizePromptVersions(type, versions, legacyPrompt) {
       ? { ...createDefaultPromptVersion(type), ...savedDefault, id: 'default', locked: true }
       : createDefaultPromptVersion(type, savedDefault ? { ...savedDefault, content: DEFAULT_PROMPTS[type] || '', locked: true, source: savedDefault.source || 'bundled' } : {});
 
-  const rest = normalizedVersions.filter((version) => version.id !== 'default');
-  const legacy = String(legacyPrompt || '').trim();
-  const legacyPromptToSkip = type === 'generate' ? LEGACY_GENERATE_PROMPT : LEGACY_PRECHECK_PROMPT;
-  const hasLegacyCustom =
-    legacy &&
-    legacy !== DEFAULT_PROMPTS[type] &&
-    legacy !== legacyPromptToSkip &&
-    !rest.some((version) => version.content === legacy);
-  if (hasLegacyCustom) {
-    rest.push({
-      id: `local-migrated-${type}`,
-      name: '本地旧版提示词',
-      content: legacy,
-      locked: false,
-      source: 'local',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-  }
-
-  return [defaultVersion, ...rest];
+  return [defaultVersion, ...normalizedVersions.filter((version) => version.id !== 'default')];
 }
 
 function getPromptVersion(settings, type, versionId) {
@@ -235,14 +184,15 @@ function getActivePromptVersion(settings, type) {
 }
 
 function getActivePromptContent(settings, type) {
-  return getActivePromptVersion(settings, type)?.content || DEFAULT_PROMPTS[type] || '';
+  const version = getActivePromptVersion(settings, type);
+  return typeof version?.content === 'string' ? version.content : DEFAULT_PROMPTS[type] || '';
 }
 
 function normalizeAiSettings(settings) {
   const saved = settings && typeof settings === 'object' ? settings : {};
-  const savedPrompts = saved.prompts || {};
-  const precheckVersions = normalizePromptVersions('precheck', saved.promptVersions?.precheck, savedPrompts.precheck);
-  const generateVersions = normalizePromptVersions('generate', saved.promptVersions?.generate, savedPrompts.generate);
+  const { deletedLegacyPrompts: _deletedLegacyPrompts, ...settingsWithoutLegacyFlags } = saved;
+  const precheckVersions = normalizePromptVersions('precheck', saved.promptVersions?.precheck);
+  const generateVersions = normalizePromptVersions('generate', saved.promptVersions?.generate);
   const activePromptVersionIds = {
     precheck: saved.activePromptVersionIds?.precheck || 'default',
     generate: saved.activePromptVersionIds?.generate || 'default',
@@ -256,7 +206,7 @@ function normalizeAiSettings(settings) {
   }
 
   const normalized = {
-    ...saved,
+    ...settingsWithoutLegacyFlags,
     activeProfileId: saved.activeProfileId || DEFAULT_ACTIVE_PROFILE_ID,
     profiles: mergeProfiles(saved.profiles),
     github: {
@@ -1135,6 +1085,7 @@ export function AiAssistField({
 function AiSettingsPanel({ settings, onChange, onClose, activeType, context, promptTemplate }) {
   const [section, setSection] = useState('api');
   const [draft, setDraft] = useState(settings);
+  const [lastSavedSettings, setLastSavedSettings] = useState(() => normalizeAiSettings(settings));
   const [previewMode, setPreviewMode] = useState('markdown');
   const [modelOptions, setModelOptions] = useState([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -1154,6 +1105,7 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
   const currentPromptText = currentPromptVersion?.content || '';
   const currentPromptPreview = fillTemplate(currentPromptText, context);
   const activeProfileCapabilities = getProfileCapabilities(activeProfile);
+  const hasSettingsChanges = JSON.stringify(normalizeAiSettings(draft)) !== JSON.stringify(lastSavedSettings);
 
   useEffect(() => {
     setModelOptions([]);
@@ -1171,6 +1123,14 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
     document.addEventListener('pointerdown', closeOnOutsidePointer, true);
     return () => document.removeEventListener('pointerdown', closeOnOutsidePointer, true);
   }, [versionMenuOpen]);
+
+  function commitSettings(nextSettings) {
+    const normalized = normalizeAiSettings(nextSettings);
+    setDraft(normalized);
+    onChange(normalized);
+    setLastSavedSettings(normalized);
+    return normalized;
+  }
 
   function updateActiveProfile(patch) {
     setDraft((previous) => ({
@@ -1205,16 +1165,19 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
     }
   }
 
-  function selectPromptVersion(versionId) {
-    setDraft((previous) =>
-      normalizeAiSettings({
-        ...previous,
-        activePromptVersionIds: {
-          ...previous.activePromptVersionIds,
-          [promptKey]: versionId,
-        },
-      }),
-    );
+  function selectPromptVersion(versionId, options = {}) {
+    const nextSettings = normalizeAiSettings({
+      ...draft,
+      activePromptVersionIds: {
+        ...draft.activePromptVersionIds,
+        [promptKey]: versionId,
+      },
+    });
+    if (options.autosave) {
+      commitSettings(nextSettings);
+      return;
+    }
+    setDraft(nextSettings);
   }
 
   function updateCurrentPrompt(value) {
@@ -1274,7 +1237,12 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
     return `空白版本 ${copyIndex}`;
   }
 
-  function createPromptVersion({ sourceVersion = currentPromptVersion, blank = false } = {}) {
+  function createPromptVersion(options = {}) {
+    const resolvedOptions =
+      typeof options === 'boolean'
+        ? { sourceVersion: currentPromptVersion, blank: !options }
+        : options || {};
+    const { sourceVersion = currentPromptVersion, blank = false, autosave = false } = resolvedOptions;
     const id = `local-${promptKey}-${Date.now()}`;
     const nextVersion = {
       id,
@@ -1285,19 +1253,22 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    setDraft((previous) =>
-      normalizeAiSettings({
-        ...previous,
-        promptVersions: {
-          ...previous.promptVersions,
-          [promptKey]: [...(previous.promptVersions?.[promptKey] || []), nextVersion],
-        },
-        activePromptVersionIds: {
-          ...previous.activePromptVersionIds,
-          [promptKey]: id,
-        },
-      }),
-    );
+    const nextSettings = normalizeAiSettings({
+      ...draft,
+      promptVersions: {
+        ...draft.promptVersions,
+        [promptKey]: [...(draft.promptVersions?.[promptKey] || []), nextVersion],
+      },
+      activePromptVersionIds: {
+        ...draft.activePromptVersionIds,
+        [promptKey]: id,
+      },
+    });
+    if (autosave) {
+      commitSettings(nextSettings);
+      return;
+    }
+    setDraft(nextSettings);
   }
 
   function renameCurrentPromptVersion(name) {
@@ -1320,40 +1291,28 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
   function deletePromptVersion(versionId) {
     const targetVersion = promptVersions.find((version) => version.id === versionId);
     if (!targetVersion || targetVersion.locked) return;
-    setDraft((previous) =>
-      normalizeAiSettings({
-        ...previous,
-        promptVersions: {
-          ...previous.promptVersions,
-          [promptKey]: (previous.promptVersions?.[promptKey] || []).filter((version) => version.id !== versionId),
-        },
-        activePromptVersionIds: {
-          ...previous.activePromptVersionIds,
-          [promptKey]: previous.activePromptVersionIds?.[promptKey] === versionId ? 'default' : previous.activePromptVersionIds?.[promptKey],
-        },
-      }),
-    );
-  }
-
-  function deleteCurrentPromptVersion() {
-    deletePromptVersion(currentPromptVersion?.id);
+    const nextSettings = normalizeAiSettings({
+      ...draft,
+      prompts: {
+        ...(draft.prompts || {}),
+        [promptKey]: draft.prompts?.[promptKey],
+      },
+      promptVersions: {
+        ...draft.promptVersions,
+        [promptKey]: (draft.promptVersions?.[promptKey] || []).filter((version) => version.id !== versionId),
+      },
+      activePromptVersionIds: {
+        ...draft.activePromptVersionIds,
+        [promptKey]: draft.activePromptVersionIds?.[promptKey] === versionId ? 'default' : draft.activePromptVersionIds?.[promptKey],
+      },
+    });
+    commitSettings(nextSettings);
   }
 
   function save() {
-    onChange(normalizeAiSettings(draft));
-    onClose();
-  }
-
-  function resetPrompts() {
-    setDraft((previous) =>
-      normalizeAiSettings({
-        ...previous,
-        activePromptVersionIds: {
-          ...previous.activePromptVersionIds,
-          [promptKey]: 'default',
-        },
-      }),
-    );
+    const nextSettings = normalizeAiSettings(draft);
+    onChange(nextSettings);
+    setLastSavedSettings(nextSettings);
   }
 
   async function refreshDefaultPrompts() {
@@ -1361,6 +1320,8 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
     try {
       const payload = await syncRemoteDefaultPrompts();
       setDraft(payload.settings);
+      onChange(payload.settings);
+      setLastSavedSettings(payload.settings);
       saveAiSettings(payload.settings);
       const results = payload.results || [];
       const updatedCount = results.filter((item) => item.updated).length;
@@ -1530,27 +1491,6 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
               <div className="ai-prompt-settings with-preview">
                 <div className="ai-prompt-toolbar">
                   <strong>{promptTemplate?.title || promptTitle}</strong>
-                  <div className="ai-prompt-version-tools">
-                    <select value={currentPromptVersion.id} onChange={(event) => selectPromptVersion(event.target.value)}>
-                      {promptVersions.map((version) => (
-                        <option key={version.id} value={version.id}>
-                          {version.name}{version.locked ? '（默认）' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <button className="ghost-button" type="button" onClick={() => createPromptVersion(true)}>
-                      复制为新版本
-                    </button>
-                    <button className="ghost-button" type="button" onClick={() => createPromptVersion(false)}>
-                      新建空白版本
-                    </button>
-                    <button className="ghost-button danger" type="button" onClick={deleteCurrentPromptVersion} disabled={currentPromptVersion.locked}>
-                      删除版本
-                    </button>
-                    <button className="ghost-button" type="button" onClick={refreshDefaultPrompts} disabled={syncingPrompts}>
-                      {syncingPrompts ? '更新中...' : '更新默认版本'}
-                    </button>
-                  </div>
                   <div className="ai-placeholder-buttons" aria-label="快捷插入占位符">
                     {placeholderEntries.length ? (
                       placeholderEntries.map((entry) => (
@@ -1594,8 +1534,7 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                               className="ai-prompt-version-select"
                               type="button"
                               onClick={() => {
-                                selectPromptVersion(version.id);
-                                setVersionMenuOpen(false);
+                                selectPromptVersion(version.id, { autosave: true });
                               }}
                             >
                               <span>{version.name}{version.locked ? '（默认）' : ''}</span>
@@ -1604,14 +1543,27 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                                 {version.committedAt ? ` · ${version.committedAt}` : ''}
                               </small>
                             </button>
+                            {version.locked && (
+                              <button
+                                className="icon-button"
+                                type="button"
+                                title={syncingPrompts ? '正在更新默认版本' : '更新默认版本'}
+                                disabled={syncingPrompts}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  refreshDefaultPrompts();
+                                }}
+                              >
+                                <RefreshCw size={14} />
+                              </button>
+                            )}
                             <button
                               className="icon-button"
                               type="button"
                               title="复制为副本"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                createPromptVersion({ sourceVersion: version });
-                                setVersionMenuOpen(false);
+                                createPromptVersion({ sourceVersion: version, autosave: true });
                               }}
                             >
                               <Copy size={14} />
@@ -1624,7 +1576,6 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                               onClick={(event) => {
                                 event.stopPropagation();
                                 deletePromptVersion(version.id);
-                                setVersionMenuOpen(false);
                               }}
                             >
                               <Trash2 size={14} />
@@ -1635,8 +1586,7 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                           <button
                             type="button"
                             onClick={() => {
-                              createPromptVersion({ blank: true });
-                              setVersionMenuOpen(false);
+                              createPromptVersion({ blank: true, autosave: true });
                             }}
                           >
                             <Plus size={15} />
@@ -1646,15 +1596,6 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                       </div>
                     )}
                   </div>
-                  <button
-                    className="ghost-button ai-version-refresh-button"
-                    type="button"
-                    onClick={refreshDefaultPrompts}
-                    disabled={syncingPrompts}
-                  >
-                    <RefreshCw size={15} />
-                    {syncingPrompts ? '更新中...' : '更新默认版本'}
-                  </button>
                   <small className="ai-prompt-version-hint">
                     {currentPromptVersion.locked ? '默认版本不可修改；如需编辑，请在下拉菜单复制为副本。' : '当前自定义版本会保存到本地数据库。'}
                     {currentPromptVersion.committedAt ? ` GitHub 提交时间：${currentPromptVersion.committedAt}` : ''}
@@ -1722,13 +1663,10 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
         </div>
 
         <div className="modal-actions">
-          <button className="ghost-button" type="button" onClick={resetPrompts}>
-            恢复默认提示词
-          </button>
           <button className="ghost-button" type="button" onClick={onClose}>
             取消
           </button>
-          <button className="primary-button" type="button" onClick={save}>
+          <button className="primary-button" type="button" onClick={save} disabled={!hasSettingsChanges}>
             保存设置
           </button>
         </div>

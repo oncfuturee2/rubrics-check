@@ -19,7 +19,13 @@ import {
 } from 'lucide-react';
 import defaultRubricsReviewTemplate from '../prompt.md?raw';
 import { AI_NOTIFICATION_EVENT, AI_SETTINGS_CHANGED_EVENT, AiAssistField, getCurrentAiPromptTemplate } from './aiAssist.jsx';
-import { EMPTY_PARSED_ZERO_NOTE_MESSAGE, extractPageRemarkText, formatRemarkTree, parseRemarkIssues } from './rawRemarkParser.js';
+import {
+  buildRemarkTree,
+  EMPTY_PARSED_ZERO_NOTE_MESSAGE,
+  extractStrictPageRemarkText,
+  formatRemarkTree,
+  parseStrictRemarkIssues,
+} from './rawRemarkParser.js';
 import { EMPTY_RAW_RECORD, buildAiPlaceholderContext, buildRawRecordTextWithCell, parseRawRecord } from './rawRecordParser.js';
 import { usePersistentElementHeights } from './uiPreferences.js';
 
@@ -300,7 +306,8 @@ function getOriginalScore(matrix, repoIndex, rubricIndex) {
 }
 
 function createReviewState(repos, rubrics, matrix, noteText, previous = {}) {
-  const remarkIssues = parseRemarkIssues(noteText);
+  const remarkParseResult = parseStrictRemarkIssues(noteText);
+  const remarkIssues = remarkParseResult.ok ? remarkParseResult.issueMap : new Map();
   return {
     promptRubricIssues: previous.promptRubricIssues || '',
     rubricIssueOpen: previous.rubricIssueOpen || {},
@@ -788,14 +795,17 @@ function SidePromptNotePanel({
   prompt,
   note,
   currentRepoNote,
+  noteParseOk,
   onPromptModeChange,
   onNoteModeChange,
   onBeautifyNoteChange,
 }) {
-  const rawNoteText = panel.noteMode === 'all' ? note : currentRepoNote;
-  const formattedNoteText = panel.beautifyNote ? formatRemarkTree(rawNoteText) : '';
-  const noteText = formattedNoteText || rawNoteText;
-  const emptyNoteText = panel.noteMode === 'all' ? '未解析备注' : '当前repo未解析到备注';
+  const noteControlsDisabled = !noteParseOk;
+  const rawNoteText = noteControlsDisabled ? note : panel.noteMode === 'all' ? note : currentRepoNote;
+  const showFormattedNote = !noteControlsDisabled && panel.beautifyNote;
+  const remarkTree = showFormattedNote ? buildRemarkTree(rawNoteText) : [];
+  const noteText = rawNoteText;
+  const emptyNoteText = noteControlsDisabled ? '备注格式不规范，无法安全解析，请查看原始备注' : panel.noteMode === 'all' ? '未解析备注' : '当前repo未解析到备注';
 
   return (
     <section className="side-context-stack">
@@ -831,8 +841,9 @@ function SidePromptNotePanel({
             <label className="mini-toggle">
               <input
                 type="checkbox"
-                checked={panel.beautifyNote !== false}
+                checked={!noteControlsDisabled && panel.beautifyNote !== false}
                 onChange={(event) => onBeautifyNoteChange(event.target.checked)}
+                disabled={noteControlsDisabled}
               />
               格式美化
             </label>
@@ -841,6 +852,7 @@ function SidePromptNotePanel({
                 type="button"
                 className={panel.noteMode === 'all' ? 'active' : ''}
                 onClick={() => onNoteModeChange('all')}
+                disabled={noteControlsDisabled}
               >
                 全部备注
               </button>
@@ -848,15 +860,44 @@ function SidePromptNotePanel({
                 type="button"
                 className={panel.noteMode !== 'all' ? 'active' : ''}
                 onClick={() => onNoteModeChange('current')}
+                disabled={noteControlsDisabled}
               >
                 当前repo备注
               </button>
             </div>
           </div>
         </div>
-        <pre>{noteText || emptyNoteText}</pre>
+        {showFormattedNote ? (
+          <RemarkTreeView tree={remarkTree} emptyText={emptyNoteText} />
+        ) : (
+          <pre>{noteText || emptyNoteText}</pre>
+        )}
       </div>
     </section>
+  );
+}
+
+function RemarkTreeView({ tree, emptyText }) {
+  if (!tree.length) {
+    return <div className="remark-tree empty">{emptyText}</div>;
+  }
+
+  return (
+    <div className="remark-tree">
+      {tree.map((page) => (
+        <section className="remark-page" key={page.pageNumber}>
+          <div className="remark-page-title">第{page.pageNumber}个页面</div>
+          <div className="remark-issues">
+            {page.issues.map((issue) => (
+              <div className="remark-issue" key={`${page.pageNumber}-${issue.rubricNumber}-${issue.description}`}>
+                <span className="remark-label">└ 第{issue.rubricNumber}条rubrics：</span>
+                <span className="remark-description">{issue.description}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
   );
 }
 
@@ -957,8 +998,13 @@ function App() {
   const parsed = useMemo(() => validateData(data), [data]);
   const isRawInputValid = Boolean(parseResult?.ok) && parsed.errors.length === 0 && parsed.warnings.length === 0;
   const repoKey = useMemo(() => parsed.repos.join('\n'), [parsed.repos]);
-  const annotationNotes = useMemo(() => parseRemarkIssues(data.note), [data.note]);
-  const currentRepoNote = useMemo(() => extractPageRemarkText(data.note, selectedRepo), [data.note, selectedRepo]);
+  const strictRemarkParse = useMemo(() => parseStrictRemarkIssues(data.note), [data.note]);
+  const canUseParsedAnnotationNotes = strictRemarkParse.ok;
+  const annotationNotes = canUseParsedAnnotationNotes ? strictRemarkParse.issueMap : new Map();
+  const currentRepoNote = useMemo(
+    () => (canUseParsedAnnotationNotes ? extractStrictPageRemarkText(data.note, selectedRepo) : ''),
+    [canUseParsedAnnotationNotes, data.note, selectedRepo],
+  );
   const rubricQualityIssues = useMemo(() => parseRubricQualityIssues(review.promptRubricIssues), [review.promptRubricIssues]);
   const currentRepoUrl = parsed.repos[selectedRepo] || '';
   const currentPage = review.pages?.[selectedRepo];
@@ -1493,8 +1539,9 @@ function App() {
                       <label className="mini-toggle review-toggle">
                         <input
                           type="checkbox"
-                          checked={showAnnotationNotes}
+                          checked={canUseParsedAnnotationNotes && showAnnotationNotes}
                           onChange={(event) => setShowAnnotationNotes(event.target.checked)}
+                          disabled={!canUseParsedAnnotationNotes}
                         />
                         显示标注备注
                       </label>
@@ -1541,8 +1588,9 @@ function App() {
                     const hasMismatch =
                       (check.expected === 0 || check.expected === 1) &&
                       originalScore !== check.expected;
-                    const annotationNote =
-                      check.annotationNote || annotationNotes.get(`${selectedRepo}:${rubricIndex}`) || '';
+                    const annotationNote = canUseParsedAnnotationNotes
+                      ? check.annotationNote || annotationNotes.get(`${selectedRepo}:${rubricIndex}`) || ''
+                      : '';
                     const displayedAnnotationNote =
                       annotationNote || (originalScore === 0 ? EMPTY_PARSED_ZERO_NOTE_MESSAGE : '');
                     const rubricQualityIssue = rubricQualityIssues.get(rubricIndex) || '';
@@ -1609,7 +1657,7 @@ function App() {
                         </button>
                       </div>
 
-                      {showAnnotationNotes && displayedAnnotationNote && (
+                      {canUseParsedAnnotationNotes && showAnnotationNotes && displayedAnnotationNote && (
                         <div className="annotation-note">
                           <strong>标注备注</strong>
                           <p>{displayedAnnotationNote}</p>
@@ -1643,6 +1691,7 @@ function App() {
                     prompt={data.prompt}
                     note={data.note}
                     currentRepoNote={currentRepoNote}
+                    noteParseOk={canUseParsedAnnotationNotes}
                     onPromptModeChange={setPromptMode}
                     onNoteModeChange={setNoteMode}
                     onBeautifyNoteChange={setBeautifyNote}

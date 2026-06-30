@@ -689,31 +689,6 @@ pre {
   font-size: 13px;
 }
 
-.ai-prompt-version-tools {
-  display: none;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.ai-prompt-version-tools select {
-  min-width: 190px;
-  min-height: 32px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--text);
-  padding: 5px 8px;
-  font-size: 12px;
-  font-weight: 900;
-}
-
-.ai-prompt-version-tools .ghost-button {
-  min-height: 32px;
-  font-size: 12px;
-  font-weight: 900;
-}
-
 .ai-prompt-sync-message {
   border: 1px solid #bfdbfe;
   border-radius: 8px;
@@ -734,7 +709,7 @@ pre {
 
 .ai-prompt-version-control-row {
   display: grid;
-  grid-template-columns: minmax(240px, 420px) auto minmax(0, 1fr);
+  grid-template-columns: minmax(240px, 420px) minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
@@ -811,7 +786,7 @@ pre {
 
 .ai-prompt-version-menu-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px 32px;
+  grid-template-columns: minmax(0, 1fr) 32px 32px 32px;
   align-items: center;
   gap: 4px;
   border-radius: 8px;
@@ -874,8 +849,7 @@ pre {
   padding-top: 6px;
 }
 
-.ai-prompt-version-menu-footer button,
-.ai-version-refresh-button {
+.ai-prompt-version-menu-footer button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -896,12 +870,6 @@ pre {
 
 .ai-prompt-version-menu-footer button:hover {
   background: #ccfbf1;
-}
-
-.ai-version-refresh-button {
-  min-height: 36px;
-  white-space: nowrap;
-  font-weight: 900;
 }
 
 .ai-prompt-version-hint {
@@ -1557,6 +1525,51 @@ button:active {
   min-height: 0;
   overflow: auto;
   padding: 9px 10px;
+}
+
+.remark-tree {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 9px 10px;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono CJK SC", monospace;
+  font-size: 12px;
+  line-height: 1.58;
+}
+
+.remark-tree.empty {
+  color: var(--muted);
+  font-family: inherit;
+}
+
+.remark-page + .remark-page {
+  margin-top: 10px;
+}
+
+.remark-page-title {
+  margin-bottom: 2px;
+}
+
+.remark-issues {
+  display: grid;
+  gap: 1px;
+}
+
+.remark-issue {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  padding-left: 14px;
+}
+
+.remark-label {
+  white-space: nowrap;
+}
+
+.remark-description {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .prompt-side-card {
@@ -2305,6 +2318,11 @@ html.ui-card-resizing * {
   border-color: #99f6e4;
   background: var(--surface-green);
   color: var(--primary);
+}
+
+.mini-toggle:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
 .note-toolbar .mini-segmented {

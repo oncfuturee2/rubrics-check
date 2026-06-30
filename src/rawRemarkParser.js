@@ -96,6 +96,90 @@ function getRemarkTokens(noteText) {
   return tokens.sort((left, right) => left.index - right.index || (left.type === 'page' ? -1 : 1));
 }
 
+function getStrictRemarkTokens(noteText) {
+  const text = String(noteText || '').replace(/\r\n/g, '\n');
+  const tokens = [];
+  const pagePattern = /(^|[;；。\n\r])\s*(?:\d+[.、)]\s*)?第([1-9]\d*)个页面->/g;
+  const rubricPattern = /第([1-9]\d*(?:(?:[、,，]|-|~|至|到)[1-9]\d*)*)条rubrics->/gi;
+
+  for (const match of text.matchAll(pagePattern)) {
+    const tokenIndex = match.index + match[1].length;
+    tokens.push({
+      type: 'page',
+      index: tokenIndex,
+      end: match.index + match[0].length,
+      pageNumber: Number(match[2]),
+    });
+  }
+
+  for (const match of text.matchAll(rubricPattern)) {
+    tokens.push({
+      type: 'rubric',
+      index: match.index,
+      end: match.index + match[0].length,
+      rubricNumbers: expandNumberList(match[1]),
+    });
+  }
+
+  return tokens.sort((left, right) => left.index - right.index || (left.type === 'page' ? -1 : 1));
+}
+
+function isOnlySafeSeparator(value) {
+  return /^[\s;；,，。]*$/.test(String(value || ''));
+}
+
+function parseStrictRemark(noteText) {
+  const text = String(noteText || '').replace(/\r\n/g, '\n');
+  const trimmed = text.trim();
+  const issueMap = new Map();
+  const pageChunks = new Map();
+  const tokens = getStrictRemarkTokens(text);
+
+  if (!trimmed) return { ok: true, issueMap, pageChunks };
+  if (!tokens.length || tokens[0].type !== 'page' || !isOnlySafeSeparator(text.slice(0, tokens[0].index))) {
+    return { ok: false, issueMap, pageChunks };
+  }
+
+  let currentPageIndex = null;
+  const pageTokens = tokens.filter((token) => token.type === 'page');
+  pageTokens.forEach((token, index) => {
+    const nextPage = pageTokens[index + 1];
+    pageChunks.set(token.pageNumber - 1, text.slice(token.index, nextPage ? nextPage.index : text.length).trim());
+  });
+
+  for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex += 1) {
+    const token = tokens[tokenIndex];
+    const nextToken = tokens[tokenIndex + 1];
+    const nextIndex = nextToken ? nextToken.index : text.length;
+    const segment = text.slice(token.end, nextIndex);
+
+    if (token.type === 'page') {
+      currentPageIndex = token.pageNumber - 1;
+      if (currentPageIndex < 0 || !nextToken || nextToken.type !== 'rubric' || !isOnlySafeSeparator(segment)) {
+        return { ok: false, issueMap, pageChunks };
+      }
+      continue;
+    }
+
+    if (token.type !== 'rubric' || currentPageIndex === null || currentPageIndex < 0 || !token.rubricNumbers.length) {
+      return { ok: false, issueMap, pageChunks };
+    }
+
+    const description = cleanDescription(segment);
+    if (!description) return { ok: false, issueMap, pageChunks };
+
+    token.rubricNumbers.forEach((rubricNumber) => {
+      issueMap.set(`${currentPageIndex}:${rubricNumber - 1}`, description);
+    });
+  }
+
+  return { ok: issueMap.size > 0, issueMap, pageChunks };
+}
+
+export function parseStrictRemarkIssues(noteText) {
+  return parseStrictRemark(noteText);
+}
+
 export function parseRemarkIssues(noteText) {
   const text = String(noteText || '').replace(/\r\n/g, '\n');
   const issueMap = new Map();
@@ -138,7 +222,13 @@ export function extractPageRemarkText(noteText, pageIndex) {
     .join('\n');
 }
 
-export function formatRemarkTree(noteText) {
+export function extractStrictPageRemarkText(noteText, pageIndex) {
+  const result = parseStrictRemark(noteText);
+  if (!result.ok) return '';
+  return result.pageChunks.get(pageIndex) || '';
+}
+
+export function buildRemarkTree(noteText) {
   const text = String(noteText || '').replace(/\r\n/g, '\n');
   const issueMap = parseRemarkIssues(text);
   const pageMap = new Map();
@@ -154,9 +244,16 @@ export function formatRemarkTree(noteText) {
 
   return [...pageMap.entries()]
     .sort(([left], [right]) => left - right)
-    .map(([pageNumber, issues]) => {
+    .map(([pageNumber, issues]) => ({
+      pageNumber,
+      issues: issues.sort((left, right) => left.rubricNumber - right.rubricNumber),
+    }));
+}
+
+export function formatRemarkTree(noteText) {
+  return buildRemarkTree(noteText)
+    .map(({ pageNumber, issues }) => {
       const issueLines = issues
-        .sort((left, right) => left.rubricNumber - right.rubricNumber)
         .map((issue) => `  └ 第${issue.rubricNumber}条rubrics：${issue.description}`);
       return [`第${pageNumber}个页面`, ...issueLines].join('\n');
     })
