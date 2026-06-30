@@ -1142,6 +1142,8 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
   const [syncingPrompts, setSyncingPrompts] = useState(false);
   const [versionMenuOpen, setVersionMenuOpen] = useState(false);
   const promptTextareaRef = useRef(null);
+  const promptPreviewBodyRef = useRef(null);
+  const pendingPreviewScrollRef = useRef(null);
   const versionMenuRef = useRef(null);
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) || draft.profiles[0];
   const promptKey = activeType === 'generate' ? 'generate' : 'precheck';
@@ -1230,6 +1232,29 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
         },
       }),
     );
+  }
+
+  function rememberPreviewScrollTarget(cursorIndex, sourceText = currentPromptText) {
+    const textLength = Math.max(1, String(sourceText || '').length);
+    pendingPreviewScrollRef.current = Math.min(1, Math.max(0, Number(cursorIndex || 0) / textLength));
+  }
+
+  function scrollPreviewToPendingTarget() {
+    const targetRatio = pendingPreviewScrollRef.current;
+    if (targetRatio === null || targetRatio === undefined) return;
+
+    window.requestAnimationFrame(() => {
+      const previewBody = promptPreviewBodyRef.current;
+      if (!previewBody) return;
+      const maxScrollTop = Math.max(0, previewBody.scrollHeight - previewBody.clientHeight);
+      previewBody.scrollTop = Math.round(maxScrollTop * targetRatio);
+      pendingPreviewScrollRef.current = null;
+    });
+  }
+
+  function handlePromptTextChange(event) {
+    rememberPreviewScrollTarget(event.target.selectionStart ?? event.target.value.length, event.target.value);
+    updateCurrentPrompt(event.target.value);
   }
 
   function copyVersionName(sourceName) {
@@ -1355,7 +1380,10 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
     const current = currentPromptText || '';
     const start = textarea?.selectionStart ?? current.length;
     const end = textarea?.selectionEnd ?? current.length;
+    const scrollTop = textarea?.scrollTop ?? 0;
+    const scrollLeft = textarea?.scrollLeft ?? 0;
     const next = `${current.slice(0, start)}${token}${current.slice(end)}`;
+    rememberPreviewScrollTarget(start + token.length, next);
     updateCurrentPrompt(next);
     window.requestAnimationFrame(() => {
       const target = promptTextareaRef.current;
@@ -1363,8 +1391,14 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
       const position = start + token.length;
       target.focus();
       target.setSelectionRange(position, position);
+      target.scrollTop = scrollTop;
+      target.scrollLeft = scrollLeft;
     });
   }
+
+  useLayoutEffect(() => {
+    scrollPreviewToPendingTarget();
+  }, [currentPromptPreview, previewMode]);
 
   return (
     <div className="modal-backdrop">
@@ -1646,7 +1680,7 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                     <textarea
                       ref={promptTextareaRef}
                       value={currentPromptText}
-                      onChange={(event) => updateCurrentPrompt(event.target.value)}
+                      onChange={handlePromptTextChange}
                       disabled={currentPromptVersion.locked}
                     />
                   </label>
@@ -1671,7 +1705,7 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                           </button>
                         </div>
                       </div>
-                      <div className="ai-prompt-preview-body">
+                      <div className="ai-prompt-preview-body" ref={promptPreviewBodyRef}>
                         {previewMode === 'markdown' ? (
                           <div className="ai-prompt-rendered-markdown">{renderAiMarkdownBlocks(currentPromptPreview)}</div>
                         ) : (
