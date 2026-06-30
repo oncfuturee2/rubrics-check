@@ -124,6 +124,41 @@ const MODE_LABELS = {
   ollama: 'Ollama Chat',
 };
 
+function FieldTitle({ children, required = false, optional = false, unsupported = false }) {
+  return (
+    <span className="ai-field-title">
+      {children}
+      {required && <b className="field-required">必填</b>}
+      {optional && <b className="field-optional">可选</b>}
+      {unsupported && <b className="field-unsupported">不支持</b>}
+    </span>
+  );
+}
+
+function isOpenAiReasoningModel(model) {
+  return /^(?:o\d|o-|gpt-5)/i.test(String(model || '').trim());
+}
+
+function getProfileCapabilities(profile) {
+  const mode = profile?.mode || 'openai-chat';
+  const openAiReasoningModel = ['openai-responses', 'openai-chat'].includes(mode) && isOpenAiReasoningModel(profile?.model);
+  return {
+    requiresBaseUrl: true,
+    requiresApiKey: mode !== 'ollama',
+    requiresModel: true,
+    supportsApiKey: mode !== 'ollama',
+    supportsTemperature: !openAiReasoningModel,
+    supportsMaxTokens: true,
+    temperatureHint: openAiReasoningModel
+      ? '当前模型通常不支持 temperature 参数，已关闭且请求时不会发送。'
+      : '越低越稳定，质检和标注建议 0.1 到 0.3。',
+    apiKeyHint:
+      mode === 'ollama'
+        ? 'Ollama 本地模式不使用 API Key，已关闭此项。'
+        : '密钥只保存在当前浏览器本地存储中。',
+  };
+}
+
 function mergeProfiles(profiles) {
   const saved = Array.isArray(profiles) ? profiles : [];
   return DEFAULT_PROFILES.map((profile) => ({ ...profile, ...(saved.find((item) => item.id === profile.id) || {}) }));
@@ -691,6 +726,7 @@ async function requestAi(profile, promptText, modeName) {
   const baseUrl = normalizeBaseUrl(profile.baseUrl);
   const maxTokens = Number(profile.maxTokens) || 1800;
   const temperature = Number(profile.temperature) || 0.2;
+  const capabilities = getProfileCapabilities(profile);
   const system = modeName === 'generate'
     ? '你是专业的 Rubrics 标注助手。'
     : '你是专业的 Rubrics 质检助手。';
@@ -705,8 +741,8 @@ async function requestAi(profile, promptText, modeName) {
       authHeaders(profile),
       {
         model: profile.model,
-        temperature,
-        max_output_tokens: maxTokens,
+        ...(capabilities.supportsTemperature ? { temperature } : {}),
+        ...(capabilities.supportsMaxTokens ? { max_output_tokens: maxTokens } : {}),
         input: [
           { role: 'system', content: [{ type: 'input_text', text: system }] },
           { role: 'user', content: [{ type: 'input_text', text: promptText }] },
@@ -722,8 +758,8 @@ async function requestAi(profile, promptText, modeName) {
       authHeaders(profile),
       {
         model: profile.model,
-        temperature,
-        max_tokens: maxTokens,
+        ...(capabilities.supportsTemperature ? { temperature } : {}),
+        ...(capabilities.supportsMaxTokens ? { max_tokens: maxTokens } : {}),
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: promptText },
@@ -743,8 +779,8 @@ async function requestAi(profile, promptText, modeName) {
       {
         model: profile.model,
         system,
-        temperature,
-        max_tokens: maxTokens,
+        ...(capabilities.supportsTemperature ? { temperature } : {}),
+        ...(capabilities.supportsMaxTokens ? { max_tokens: maxTokens } : {}),
         messages: [{ role: 'user', content: promptText }],
       },
     );
@@ -758,7 +794,10 @@ async function requestAi(profile, promptText, modeName) {
       {},
       {
         contents: [{ role: 'user', parts: [{ text: `${system}\n\n${promptText}` }] }],
-        generationConfig: { temperature, maxOutputTokens: maxTokens },
+        generationConfig: {
+          ...(capabilities.supportsTemperature ? { temperature } : {}),
+          ...(capabilities.supportsMaxTokens ? { maxOutputTokens: maxTokens } : {}),
+        },
       },
     );
     return extractTextFromResponse(profile.mode, payload);
@@ -771,7 +810,10 @@ async function requestAi(profile, promptText, modeName) {
       {
         model: profile.model,
         stream: false,
-        options: { temperature, num_predict: maxTokens },
+        options: {
+          ...(capabilities.supportsTemperature ? { temperature } : {}),
+          ...(capabilities.supportsMaxTokens ? { num_predict: maxTokens } : {}),
+        },
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: promptText },
@@ -1109,6 +1151,7 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
   const currentPromptVersion = getActivePromptVersion(draft, promptKey);
   const currentPromptText = currentPromptVersion?.content || '';
   const currentPromptPreview = fillTemplate(currentPromptText, context);
+  const activeProfileCapabilities = getProfileCapabilities(activeProfile);
 
   useEffect(() => {
     setModelOptions([]);
@@ -1354,7 +1397,7 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                   <p>选择接口模式后填写对应的 Base URL、API Key 和模型名称。Ollama 本地模式通常不需要 API Key。</p>
                 </div>
                 <label>
-                  <span>当前模型配置</span>
+                  <FieldTitle required>当前模型配置</FieldTitle>
                   <select value={draft.activeProfileId} onChange={(event) => setDraft((previous) => ({ ...previous, activeProfileId: event.target.value }))}>
                     {draft.profiles.map((profile) => (
                       <option key={profile.id} value={profile.id}>
@@ -1365,7 +1408,7 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                   <small>选择要编辑和调用的模型预设。</small>
                 </label>
                 <label>
-                  <span>接口模式</span>
+                  <FieldTitle required>接口模式</FieldTitle>
                   <select value={activeProfile.mode} onChange={(event) => updateActiveProfile({ mode: event.target.value })}>
                     {Object.entries(MODE_LABELS).map(([value, label]) => (
                       <option key={value} value={value}>
@@ -1376,22 +1419,34 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                   <small>OpenAI Responses 适合官方新版接口；OpenAI兼容 Chat 适合多数中转或兼容服务。</small>
                 </label>
                 <label>
-                  <span>显示名称</span>
+                  <FieldTitle required>显示名称</FieldTitle>
                   <input value={activeProfile.name} onChange={(event) => updateActiveProfile({ name: event.target.value })} />
                   <small>显示在模型下拉菜单里的名称。</small>
                 </label>
                 <label>
-                  <span>Base URL</span>
+                  <FieldTitle required={activeProfileCapabilities.requiresBaseUrl}>Base URL</FieldTitle>
                   <input value={activeProfile.baseUrl} onChange={(event) => updateActiveProfile({ baseUrl: event.target.value })} />
                   <small>例如 https://api.openai.com/v1 或 http://localhost:11434。</small>
                 </label>
-                <label>
-                  <span>API Key</span>
-                  <input type="password" value={activeProfile.apiKey} onChange={(event) => updateActiveProfile({ apiKey: event.target.value })} placeholder="Ollama 本地模式可留空" />
-                  <small>密钥只保存在当前浏览器本地存储中。</small>
+                <label className={!activeProfileCapabilities.supportsApiKey ? 'field-disabled' : ''}>
+                  <FieldTitle
+                    required={activeProfileCapabilities.requiresApiKey}
+                    optional={!activeProfileCapabilities.requiresApiKey && activeProfileCapabilities.supportsApiKey}
+                    unsupported={!activeProfileCapabilities.supportsApiKey}
+                  >
+                    API Key
+                  </FieldTitle>
+                  <input
+                    type="password"
+                    value={activeProfile.apiKey}
+                    onChange={(event) => updateActiveProfile({ apiKey: event.target.value })}
+                    placeholder={activeProfileCapabilities.supportsApiKey ? '填写服务商 API Key' : '当前接口模式不使用 API Key'}
+                    disabled={!activeProfileCapabilities.supportsApiKey}
+                  />
+                  <small>{activeProfileCapabilities.apiKeyHint}</small>
                 </label>
                 <label>
-                  <span>模型名称</span>
+                  <FieldTitle required={activeProfileCapabilities.requiresModel}>模型名称</FieldTitle>
                   <div className="ai-model-input-row">
                     {modelOptions.length ? (
                       <select value={activeProfile.model} onChange={(event) => updateActiveProfile({ model: event.target.value })}>
@@ -1411,14 +1466,29 @@ function AiSettingsPanel({ settings, onChange, onClose, activeType, context, pro
                   <small>填写服务商要求的模型 ID，例如 gpt-4.1-mini、claude-3-5-sonnet-latest。</small>
                   {modelListMessage && <em>{modelListMessage}</em>}
                 </label>
-                <label>
-                  <span>温度</span>
-                  <input type="number" min="0" max="2" step="0.1" value={activeProfile.temperature} onChange={(event) => updateActiveProfile({ temperature: event.target.value })} />
-                  <small>越低越稳定，质检和标注建议 0.1 到 0.3。</small>
+                <label className={!activeProfileCapabilities.supportsTemperature ? 'field-disabled' : ''}>
+                  <FieldTitle unsupported={!activeProfileCapabilities.supportsTemperature}>温度</FieldTitle>
+                  <input
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={activeProfile.temperature}
+                    onChange={(event) => updateActiveProfile({ temperature: event.target.value })}
+                    disabled={!activeProfileCapabilities.supportsTemperature}
+                  />
+                  <small>{activeProfileCapabilities.temperatureHint}</small>
                 </label>
-                <label>
-                  <span>最大输出 Token</span>
-                  <input type="number" min="256" step="128" value={activeProfile.maxTokens} onChange={(event) => updateActiveProfile({ maxTokens: event.target.value })} />
+                <label className={!activeProfileCapabilities.supportsMaxTokens ? 'field-disabled' : ''}>
+                  <FieldTitle unsupported={!activeProfileCapabilities.supportsMaxTokens}>最大输出 Token</FieldTitle>
+                  <input
+                    type="number"
+                    min="256"
+                    step="128"
+                    value={activeProfile.maxTokens}
+                    onChange={(event) => updateActiveProfile({ maxTokens: event.target.value })}
+                    disabled={!activeProfileCapabilities.supportsMaxTokens}
+                  />
                   <small>控制模型最多返回多少内容，rubrics 场景建议 1200 到 3000。</small>
                 </label>
               </div>
